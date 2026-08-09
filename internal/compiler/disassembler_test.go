@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	awkregex "github.com/benhoyt/goawk/regex"
 )
 
 func TestDisassembler(t *testing.T) {
@@ -25,7 +27,7 @@ func TestDisassembler(t *testing.T) {
 				},
 				Nums:            []float64{0},
 				Strs:            []string{""},
-				Regexes:         []*regexp.Regexp{regexp.MustCompile("")},
+				Regexes:         []awkregex.Regexp{regexp.MustCompile("")},
 				scalarNames:     []string{"s"},
 				arrayNames:      []string{"a"},
 				nativeFuncNames: []string{"n"},

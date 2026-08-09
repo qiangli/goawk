@@ -4,6 +4,7 @@ package interp
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -272,7 +273,7 @@ func (p *interp) split(s string, scope resolver.Scope, index int, sep string, se
 	case !sepIsRegex && utf8.RuneCountInString(sep) <= 1:
 		parts = strings.Split(s, sep)
 	default:
-		re, err := p.compileRegex(sep)
+		re, err := p.compileRegexStd(sep)
 		if err != nil {
 			return 0, err
 		}
@@ -288,7 +289,7 @@ func (p *interp) split(s string, scope resolver.Scope, index int, sep string, se
 
 // Guts of the sub() and gsub() functions
 func (p *interp) sub(regex, repl, in string, global bool) (out string, num int, err error) {
-	re, err := p.compileRegex(regex)
+	re, err := p.compileRegexStd(regex)
 	if err != nil {
 		return "", 0, err
 	}

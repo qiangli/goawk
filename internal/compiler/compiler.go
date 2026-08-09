@@ -4,12 +4,12 @@ package compiler
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"strconv"
 
 	"github.com/benhoyt/goawk/internal/ast"
 	"github.com/benhoyt/goawk/internal/resolver"
 	"github.com/benhoyt/goawk/lexer"
+	"github.com/benhoyt/goawk/regex"
 )
 
 // Program holds an entire compiled program.
@@ -20,7 +20,10 @@ type Program struct {
 	Functions []Function
 	Nums      []float64
 	Strs      []string
-	Regexes   []*regexp.Regexp
+	Regexes   []regex.Regexp
+	// RegexCompiler is retained so dynamic expressions use the same backend
+	// that compiled the program's regular expression literals.
+	RegexCompiler regex.Compiler
 
 	// For disassembly
 	scalarNames     []string
@@ -55,8 +58,13 @@ func (e *compileError) Error() string {
 	return e.message
 }
 
-// Compile compiles an AST (parsed program) into virtual machine instructions.
-func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err error) {
+// Config holds compiler configuration.
+type Config struct {
+	RegexCompiler regex.Compiler
+}
+
+// Compile compiles a resolved abstract syntax tree to a virtual machine program.
+func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *Program, err error) {
 	defer func() {
 		// The compiler uses panic with a *compileError to signal compile
 		// errors internally, and they're caught here. This avoids the
@@ -67,13 +75,18 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 		}
 	}()
 
-	p := &Program{}
+	regexCompiler := regex.DefaultCompiler()
+	if config != nil && config.RegexCompiler != nil {
+		regexCompiler = config.RegexCompiler
+	}
+	p := &Program{RegexCompiler: regexCompiler}
 
 	// Reuse identical constants across entire program.
 	indexes := constantIndexes{
-		nums:    make(map[float64]int),
-		strs:    make(map[string]int),
-		regexes: make(map[string]int),
+		nums:          make(map[float64]int),
+		strs:          make(map[string]int),
+		regexes:       make(map[string]int),
+		regexCompiler: regexCompiler,
 	}
 
 	// Compile functions. For functions called before they're defined or
@@ -192,9 +205,10 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 
 // So we can look up the indexes of constants that have been used before.
 type constantIndexes struct {
-	nums    map[float64]int
-	strs    map[string]int
-	regexes map[string]int
+	nums          map[float64]int
+	strs          map[string]int
+	regexes       map[string]int
+	regexCompiler regex.Compiler
 }
 
 // Holds the compilation state.
@@ -704,7 +718,7 @@ func (c *compiler) expr(expr ast.Expr) {
 		}
 
 	case *ast.RegExpr:
-		c.add(Regex, opcodeInt(c.regexIndex(e.Regex)))
+		c.add(Regex, opcodeInt(c.addRegex(e.Regex)))
 
 	case *ast.BinaryExpr:
 		// && and || are special cases as they're short-circuit operators.
@@ -1092,13 +1106,21 @@ func (c *compiler) strIndex(s string) int {
 }
 
 // Add (or reuse) a regex constant and returns its index.
-func (c *compiler) regexIndex(r string) int {
+func (c *compiler) addRegex(r string) int {
 	if index, ok := c.indexes.regexes[r]; ok {
 		return index // reuse existing constant
 	}
+	var re regex.Regexp
+	var err error
+	re, err = c.indexes.regexCompiler.Compile(r)
+	if err != nil {
+		// Should have been caught by parser, but just in case
+		panic(&compileError{message: fmt.Sprintf("invalid regex %q: %s", r, err)})
+	}
+	if re == nil {
+		panic(&compileError{message: fmt.Sprintf("invalid regex %q: compiler returned nil", r)})
+	}
 	index := len(c.program.Regexes)
-	re := regexp.MustCompile(AddRegexFlags(r))
-	re.Longest() // other awks use leftmost-longest matching
 	c.program.Regexes = append(c.program.Regexes, re)
 	c.indexes.regexes[r] = index
 	return index

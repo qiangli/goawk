@@ -30,6 +30,7 @@ import (
 	"github.com/benhoyt/goawk/internal/compiler"
 	"github.com/benhoyt/goawk/internal/resolver"
 	"github.com/benhoyt/goawk/parser"
+	"github.com/benhoyt/goawk/regex"
 )
 
 var (
@@ -142,7 +143,7 @@ type interp struct {
 	functions []compiler.Function
 	nums      []float64
 	strs      []string
-	regexes   []*regexp.Regexp
+	regexes   []regex.Regexp
 
 	// Context support (for Interpreter.ExecuteContext)
 	checkCtx bool
@@ -154,7 +155,9 @@ type interp struct {
 	random            *rand.Rand
 	randSeed          float64
 	exitStatus        int
-	regexCache        map[string]*regexp.Regexp
+	regexCacheStd     map[string]*regexp.Regexp
+	regexCache        map[string]regex.Regexp
+	regexCompiler     regex.Compiler
 	formatCache       map[string]cachedFormat
 	csvJoinFieldsBuf  bytes.Buffer
 	chars             bool
@@ -397,11 +400,12 @@ func ExecProgram(program *parser.Program, config *Config) (int, error) {
 
 func newInterp(program *parser.Program) *interp {
 	p := &interp{
-		program:   program,
-		functions: program.Compiled.Functions,
-		nums:      program.Compiled.Nums,
-		strs:      program.Compiled.Strs,
-		regexes:   program.Compiled.Regexes,
+		program:       program,
+		functions:     program.Compiled.Functions,
+		nums:          program.Compiled.Nums,
+		strs:          program.Compiled.Strs,
+		regexes:       program.Compiled.Regexes,
+		regexCompiler: program.Compiled.RegexCompiler,
 	}
 
 	// Allocate memory for variables and virtual machine stack
@@ -422,7 +426,8 @@ func newInterp(program *parser.Program) *interp {
 	}
 
 	// Initialize defaults
-	p.regexCache = make(map[string]*regexp.Regexp, 10)
+	p.regexCacheStd = make(map[string]*regexp.Regexp, 10)
+	p.regexCache = make(map[string]regex.Regexp, 10)
 	p.formatCache = make(map[string]cachedFormat, 10)
 	p.randSeed = 1.0
 	seed := math.Float64bits(p.randSeed)
@@ -1043,19 +1048,42 @@ func (p *interp) toString(v value) string {
 	return v.str(p.convertFormat)
 }
 
-// Compile regex string (or fetch from regex cache)
-func (p *interp) compileRegex(regex string) (*regexp.Regexp, error) {
-	if re, ok := p.regexCache[regex]; ok {
+// Compile standard regex string (for FS, RS, split, sub, gsub)
+func (p *interp) compileRegexStd(regexStr string) (*regexp.Regexp, error) {
+	if re, ok := p.regexCacheStd[regexStr]; ok {
 		return re, nil
 	}
-	re, err := regexp.Compile(compiler.AddRegexFlags(regex))
+
+	re, err := regexp.Compile(compiler.AddRegexFlags(regexStr))
 	if err != nil {
-		return nil, newError("invalid regex %q: %s", regex, err)
+		return nil, newError("invalid regex %q: %s", regexStr, err)
 	}
 	re.Longest() // other awks use leftmost-longest matching
+
 	// Dumb, non-LRU cache: just cache the first N regexes
+	if len(p.regexCacheStd) < maxCachedRegexes {
+		p.regexCacheStd[regexStr] = re
+	}
+	return re, nil
+}
+
+// Compile custom regex string (for match(), ~, !~)
+func (p *interp) compileRegex(regexStr string) (regex.Regexp, error) {
+	if re, ok := p.regexCache[regexStr]; ok {
+		return re, nil
+	}
+
+	re, err := p.regexCompiler.Compile(regexStr)
+	if err != nil {
+		return nil, newError("invalid regex %q: %s", regexStr, err)
+	}
+	if re == nil {
+		return nil, newError("invalid regex %q: compiler returned nil", regexStr)
+	}
+
+	// Dumb, non-LRU cache: just cache the first N regexes.
 	if len(p.regexCache) < maxCachedRegexes {
-		p.regexCache[regex] = re
+		p.regexCache[regexStr] = re
 	}
 	return re, nil
 }

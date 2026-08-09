@@ -309,7 +309,8 @@ argsLoop:
 			DebugWriter: parserConfig.DebugWriter})
 
 		// re-compile it
-		prog.Compiled, err = compiler.Compile(&prog.ResolvedProgram)
+		compConfig := &compiler.Config{RegexCompiler: prog.Compiled.RegexCompiler}
+		prog.Compiled, err = compiler.Compile(&prog.ResolvedProgram, compConfig)
 		if err != nil {
 			errorExitf("%s", err)
 		}
