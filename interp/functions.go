@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -332,6 +334,65 @@ type cachedFormat struct {
 	types  []byte
 }
 
+// POSIX specifies that a negative precision supplied by * is treated as if
+// the precision were omitted. Go's fmt package instead emits %!(BADPREC), so
+// remove the precision and its argument before handing the format to fmt.
+func normalizeNegativeDynamicPrecisions(format string, args []value) (string, []value) {
+	if !strings.Contains(format, ".*") {
+		return format, args
+	}
+	out := make([]byte, 0, len(format))
+	drop := make([]bool, len(args))
+	argIndex := 0
+	changed := false
+	for i := 0; i < len(format); {
+		out = append(out, format[i])
+		if format[i] != '%' {
+			i++
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		out = append(out, format[i])
+		if format[i] == '%' {
+			i++
+			continue
+		}
+		for bytes.IndexByte([]byte(" .-+*#0123456789"), format[i]) >= 0 {
+			if format[i] == '*' {
+				isPrecision := i > 0 && format[i-1] == '.'
+				if isPrecision && argIndex < len(args) && args[argIndex].num() < 0 {
+					out = out[:len(out)-2] // remove the copied .* pair
+					drop[argIndex] = true
+					changed = true
+				}
+				argIndex++
+			}
+			i++
+			if i >= len(format) {
+				break
+			}
+			out = append(out, format[i])
+		}
+		if i < len(format) {
+			argIndex++ // conversion operand
+			i++
+		}
+	}
+	if !changed {
+		return format, args
+	}
+	filtered := make([]value, 0, len(args))
+	for i, arg := range args {
+		if !drop[i] {
+			filtered = append(filtered, arg)
+		}
+	}
+	return string(out), filtered
+}
+
 // Parse given sprintf format string into Go format string, along with
 // type conversion specifiers. Output is memoized in a simple cache
 // for performance.
@@ -372,12 +433,13 @@ func (p *interp) parseFmtTypes(s string) (format string, types []byte, err error
 				out[i] = 'd'
 			case 'f', 'e', 'E', 'g', 'G':
 				t = 'f'
-			case 'a':
-				t = 'f'
-				out[i] = 'x'
-			case 'A':
-				t = 'f'
-				out[i] = 'X'
+			case 'a', 'A', 'F':
+				// Go's fmt package does not implement C/POSIX F and its
+				// x/X floating-point exponent and zero-padding differ from
+				// a/A. Preserve the verb and route it through awkFloat's
+				// fmt.Formatter implementation below. fmt still resolves
+				// flags and dynamic width/precision before calling it.
+				t = s[i]
 			case 'u':
 				t = 'u'
 				out[i] = 'd'
@@ -401,6 +463,7 @@ func (p *interp) parseFmtTypes(s string) (format string, types []byte, err error
 
 // Guts of sprintf() function (also used by "printf" statement)
 func (p *interp) sprintf(format string, args []value) (string, error) {
+	format, args = normalizeNegativeDynamicPrecisions(format, args)
 	format, types, err := p.parseFmtTypes(format)
 	if err != nil {
 		return "", newError("format error: %s", err)
@@ -419,6 +482,8 @@ func (p *interp) sprintf(format string, args []value) (string, error) {
 			v = int64(a.num())
 		case 'f':
 			v = a.num()
+		case 'a', 'A', 'F':
+			v = awkFloat(a.num())
 		case 'u':
 			v = uint64(int64(a.num()))
 		case 'c':
@@ -448,6 +513,134 @@ func (p *interp) sprintf(format string, args []value) (string, error) {
 		converted = append(converted, v)
 	}
 	return fmt.Sprintf(format, converted...), nil
+}
+
+// awkFloat implements the C/POSIX floating-point conversions that Go's fmt
+// package does not provide directly. Keeping it as a fmt.Formatter lets fmt
+// continue to parse flags and resolve * width/precision arguments for us.
+type awkFloat float64
+
+func (v awkFloat) Format(state fmt.State, verb rune) {
+	n := float64(v)
+	upper := verb == 'A' || verb == 'F'
+	special := math.IsNaN(n) || math.IsInf(n, 0)
+
+	sign := ""
+	if !math.IsNaN(n) {
+		switch {
+		case math.Signbit(n):
+			sign = "-"
+			n = -n
+		case state.Flag('+'):
+			sign = "+"
+		case state.Flag(' '):
+			sign = " "
+		}
+	}
+
+	precision, hasPrecision := state.Precision()
+	var body string
+	switch {
+	case math.IsNaN(n):
+		body = "nan"
+	case math.IsInf(n, 1):
+		body = "inf"
+	case verb == 'F':
+		if !hasPrecision {
+			precision = 6
+		}
+		body = strconv.FormatFloat(n, 'f', precision, 64)
+		if state.Flag('#') && precision == 0 {
+			body += "."
+		}
+	default:
+		body = formatHexFloat(n, precision, hasPrecision)
+		body = trimHexExponentZeros(body)
+		if state.Flag('#') {
+			if exponent := strings.IndexByte(body, 'p'); exponent >= 0 &&
+				!strings.Contains(body[:exponent], ".") {
+				body = body[:exponent] + "." + body[exponent:]
+			}
+		}
+	}
+	if upper {
+		body = strings.ToUpper(body)
+	}
+
+	width, hasWidth := state.Width()
+	padding := 0
+	if hasWidth && width > len(sign)+len(body) {
+		padding = width - len(sign) - len(body)
+	}
+	if state.Flag('-') {
+		_, _ = io.WriteString(state, sign)
+		_, _ = io.WriteString(state, body)
+		writePadding(state, ' ', padding)
+		return
+	}
+	if state.Flag('0') && !special {
+		_, _ = io.WriteString(state, sign)
+		if (verb == 'a' || verb == 'A') && len(body) >= 2 &&
+			(body[:2] == "0x" || body[:2] == "0X") {
+			_, _ = io.WriteString(state, body[:2])
+			writePadding(state, '0', padding)
+			_, _ = io.WriteString(state, body[2:])
+			return
+		}
+		writePadding(state, '0', padding)
+		_, _ = io.WriteString(state, body)
+		return
+	}
+	writePadding(state, ' ', padding)
+	_, _ = io.WriteString(state, sign)
+	_, _ = io.WriteString(state, body)
+}
+
+func formatHexFloat(n float64, precision int, hasPrecision bool) string {
+	if !hasPrecision {
+		precision = -1
+	}
+	body := strconv.FormatFloat(n, 'x', precision, 64)
+	if !hasPrecision || n == 0 {
+		return body
+	}
+
+	// FormatFloat renormalizes a significand that rounds from 1.xxx to 2.000
+	// by incrementing the exponent. C printf and gawk retain the exponent of
+	// the unrounded value and emit a leading 2 instead.
+	_, exponent := math.Frexp(n)
+	wantExponent := exponent - 1
+	p := strings.IndexByte(body, 'p')
+	if p < 0 || !strings.HasPrefix(body, "0x1") {
+		return body
+	}
+	gotExponent, err := strconv.Atoi(body[p+1:])
+	if err != nil || gotExponent != wantExponent+1 {
+		return body
+	}
+	body = body[:2] + "2" + body[3:p] + "p"
+	if wantExponent >= 0 {
+		body += "+"
+	}
+	return body + strconv.Itoa(wantExponent)
+}
+
+func trimHexExponentZeros(s string) string {
+	exponent := strings.IndexByte(s, 'p')
+	if exponent < 0 || exponent+2 >= len(s) {
+		return s
+	}
+	digits := exponent + 2 // skip p and its sign
+	for digits+1 < len(s) && s[digits] == '0' {
+		digits++
+	}
+	return s[:exponent+2] + s[digits:]
+}
+
+func writePadding(w io.Writer, b byte, count int) {
+	if count > 0 {
+		_, _ = io.WriteString(w, strings.Repeat(string(b), count))
+	}
 }
 
 func substrChars(s string, pos int) string {
