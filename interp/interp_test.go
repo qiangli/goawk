@@ -113,6 +113,7 @@ NR==3, NR==5 { print NR }
 	{`BEGIN { printf "%a %A\n", 1234.56, 1234.56 }  # !windows-gawk`, "", "0x1.34a3d70a3d70ap+10 0X1.34A3D70A3D70AP+10\n", "", ""},
 	{`BEGIN { printf "%F %#.0F\n", 0.125, 1 }  # !awk`, "", "0.125000 1.\n", "", ""},
 	{`BEGIN { printf "<%*.*a><%.*F>\n", -12, -1, 0.125, -1, 0.125 }  # !awk`, "", "<0x1p-3      ><0.125000>\n", "", ""},
+	{`BEGIN { printf "<%.*a><%.*F><%.*f>\n", -0.5, 0.1, -0.5, 0.125, -0.5, 0.125 }  # !awk`, "", "<0x2p-4><0><0>\n", "", ""},
 
 	// if and loop statements
 	{`BEGIN { if (1) print "t"; }`, "", "t\n", "", ""},

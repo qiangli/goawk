@@ -57,6 +57,9 @@ func TestSprintfNegativeDynamicPrecisionIsOmitted(t *testing.T) {
 		{"existing float", "%.*f", []value{num(-1), num(0.125)}, "0.125000"},
 		{"negative width and precision", "%*.*a", []value{num(-12), num(-1), num(0.125)}, "0x1p-3      "},
 		{"multiple conversions", "%.*a %.1F", []value{num(-1), num(0.125), num(0.125)}, "0x1p-3 0.1"},
+		{"fractional negative precision hex", "%.*a", []value{num(-0.5), num(0.1)}, "0x2p-4"},
+		{"fractional negative precision uppercase fixed", "%.*F", []value{num(-0.5), num(0.125)}, "0"},
+		{"fractional negative precision existing float", "%.*f", []value{num(-0.5), num(0.125)}, "0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

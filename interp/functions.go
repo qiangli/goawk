@@ -363,7 +363,7 @@ func normalizeNegativeDynamicPrecisions(format string, args []value) (string, []
 		for bytes.IndexByte([]byte(" .-+*#0123456789"), format[i]) >= 0 {
 			if format[i] == '*' {
 				isPrecision := i > 0 && format[i-1] == '.'
-				if isPrecision && argIndex < len(args) && args[argIndex].num() < 0 {
+				if isPrecision && argIndex < len(args) && int64(args[argIndex].num()) < 0 {
 					out = out[:len(out)-2] // remove the copied .* pair
 					drop[argIndex] = true
 					changed = true
