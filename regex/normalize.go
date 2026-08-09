@@ -88,9 +88,23 @@ func parseERE(s string, pos int, isGroup bool) (string, int, error) {
 		// Parse zero or more quantifiers following atom
 		currStr := atomStr
 		currIsQuantified := isQuantified
+		currHasLazySuffix := false
 		for pos < len(s) {
 			qCh := s[pos]
 			if qCh == '*' || qCh == '+' || qCh == '?' || (qCh == '{' && isIntervalStart(s, pos)) {
+				// Go's regexp backend accepts a single '?' suffix as the lazy
+				// modifier for an existing quantifier. Preserve it verbatim: treating
+				// it as another optional repetition would change a required match
+				// such as a{2}? into a zero-or-one match.
+				if currIsQuantified && qCh == '?' && !currHasLazySuffix {
+					currStr += "?"
+					currHasLazySuffix = true
+					pos++
+					continue
+				}
+				if currHasLazySuffix {
+					return "", pos, fmt.Errorf("quantifier after lazy suffix at position %d", pos)
+				}
 				_, _, qNorm, qNext, qErr := parseQuantifier(s, pos)
 				if qErr != nil {
 					return "", pos, qErr

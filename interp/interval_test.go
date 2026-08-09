@@ -74,6 +74,20 @@ func TestIntervalExecution(t *testing.T) {
 		t.Fatalf("effective repetition above RE_DUP_MAX failed: out=%q, err=%v", out, err)
 	}
 
+	// Preserve the backend's lazy-quantifier suffix. It changes match choice,
+	// not cardinality: a{2}? must still require two input characters.
+	srcLazyStatic := `BEGIN { print match("", /a{0002}?/), RLENGTH; print match("a", /a{0002}?/), RLENGTH; print match("aa", /a{0002}?/), RLENGTH }`
+	out, err = execAWK(t, srcLazyStatic, "")
+	if err != nil || strings.TrimSpace(out) != "0 -1\n0 -1\n1 2" {
+		t.Fatalf("static lazy interval failed: out=%q, err=%v", out, err)
+	}
+
+	srcLazyDynamic := `BEGIN { re="a{0002,0003}?"; print match("", re), RLENGTH; print match("a", re), RLENGTH; print match("aa", re), RLENGTH }`
+	out, err = execAWK(t, srcLazyDynamic, "")
+	if err != nil || strings.TrimSpace(out) != "0 -1\n0 -1\n1 2" {
+		t.Fatalf("dynamic lazy interval failed: out=%q, err=%v", out, err)
+	}
+
 	src1Fail := `BEGIN { print match("aaaaa", /a{0002}{0003}/) }`
 	out, err = execAWK(t, src1Fail, "")
 	if err != nil || strings.TrimSpace(out) != "0" {
