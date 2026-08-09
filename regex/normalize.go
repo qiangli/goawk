@@ -1,9 +1,11 @@
 package regex
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 const reDupMax = 255
@@ -14,12 +16,29 @@ const reDupMax = 255
 func Normalize(expr string) (string, error) {
 	norm, endPos, err := parseERE(expr, 0, false)
 	if err != nil {
-		return "", err
+		var intervalErr *intervalValidationError
+		if errors.As(err, &intervalErr) {
+			return "", err
+		}
+		// Normalization is not an ERE validator. Preserve malformed and otherwise
+		// unsupported input byte-for-byte so the selected regexp backend retains
+		// ownership of its established diagnostics and compatibility behavior.
+		return expr, nil
 	}
 	if endPos < len(expr) {
-		return "", fmt.Errorf("unmatched ')' at position %d", endPos)
+		return expr, nil
 	}
 	return norm, nil
+}
+
+type intervalValidationError struct {
+	message string
+}
+
+func (e *intervalValidationError) Error() string { return e.message }
+
+func invalidInterval(format string, args ...any) error {
+	return &intervalValidationError{message: fmt.Sprintf(format, args...)}
 }
 
 func parseERE(s string, pos int, isGroup bool) (string, int, error) {
@@ -60,7 +79,7 @@ func parseERE(s string, pos int, isGroup bool) (string, int, error) {
 		}
 
 		// Parse atom
-		atomStr, isQuantified, minBound, maxBound, nextPos, err := parseAtom(s, pos)
+		atomStr, isQuantified, _, _, nextPos, err := parseAtom(s, pos)
 		if err != nil {
 			return "", pos, err
 		}
@@ -69,31 +88,12 @@ func parseERE(s string, pos int, isGroup bool) (string, int, error) {
 		// Parse zero or more quantifiers following atom
 		currStr := atomStr
 		currIsQuantified := isQuantified
-		currMin := minBound
-		currMax := maxBound
-
 		for pos < len(s) {
 			qCh := s[pos]
 			if qCh == '*' || qCh == '+' || qCh == '?' || (qCh == '{' && isIntervalStart(s, pos)) {
-				qMin, qMax, qNorm, qNext, qErr := parseQuantifier(s, pos)
+				_, _, qNorm, qNext, qErr := parseQuantifier(s, pos)
 				if qErr != nil {
 					return "", pos, qErr
-				}
-
-				newMin, err := checkedMul(currMin, qMin)
-				if err != nil || newMin > reDupMax {
-					return "", pos, fmt.Errorf("interval bound %d exceeds RE_DUP_MAX=%d", newMin, reDupMax)
-				}
-
-				newMax := -1
-				if currMax != -1 && qMax != -1 {
-					var err error
-					newMax, err = checkedMul(currMax, qMax)
-					if err != nil || newMax > reDupMax {
-						return "", pos, fmt.Errorf("interval bound %d exceeds RE_DUP_MAX=%d", newMax, reDupMax)
-					}
-				} else if qMin == 0 && (currMax == 0 || qMax == 0) {
-					newMax = 0
 				}
 
 				if !currIsQuantified {
@@ -103,8 +103,6 @@ func parseERE(s string, pos int, isGroup bool) (string, int, error) {
 				}
 
 				currIsQuantified = true
-				currMin = newMin
-				currMax = newMax
 				pos = qNext
 			} else {
 				break
@@ -147,21 +145,35 @@ func parseAtom(s string, pos int) (atomStr string, isQuantified bool, minBound i
 		return bracketStr, false, 1, 1, nextPos, nil
 	}
 
-	// Single character atom (including literals, '.', '^', '$', etc.)
-	return string(ch), false, 1, 1, pos + 1, nil
+	// One UTF-8 atom (including literals, '.', '^', '$', etc.). Slicing the
+	// original source preserves its exact bytes; string(ch) would re-encode a
+	// non-ASCII leading byte as a different rune and corrupt every Unicode ERE.
+	_, size := utf8.DecodeRuneInString(s[pos:])
+	if size == 0 {
+		size = 1
+	}
+	return s[pos : pos+size], false, 1, 1, pos + size, nil
 }
 
 func isIntervalStart(s string, pos int) bool {
-	if pos < len(s) && s[pos] == '{' {
-		if pos+1 >= len(s) {
-			return true
-		}
-		ch := s[pos+1]
-		if (ch >= '0' && ch <= '9') || ch == ',' || ch == '-' {
-			return true
-		}
+	if pos >= len(s) || s[pos] != '{' || pos+1 >= len(s) || s[pos+1] < '0' || s[pos+1] > '9' {
+		return false
 	}
-	return false
+	i := pos + 1
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i < len(s) && s[i] == '}' {
+		return true
+	}
+	if i >= len(s) || s[i] != ',' {
+		return false
+	}
+	i++
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return i < len(s) && s[i] == '}'
 }
 
 func parseQuantifier(s string, pos int) (qMin int, qMax int, qNorm string, nextPos int, err error) {
@@ -189,7 +201,7 @@ func parseInterval(s string, pos int) (qMin int, qMax int, qNorm string, nextPos
 		return 0, 0, "", start, err
 	}
 	if m > reDupMax {
-		return 0, 0, "", start, fmt.Errorf("interval bound %d exceeds RE_DUP_MAX=%d", m, reDupMax)
+		return 0, 0, "", start, invalidInterval("interval bound %d exceeds RE_DUP_MAX=%d", m, reDupMax)
 	}
 
 	if pos >= len(s) {
@@ -216,13 +228,13 @@ func parseInterval(s string, pos int) (qMin int, qMax int, qNorm string, nextPos
 				return 0, 0, "", start, err
 			}
 			if n > reDupMax {
-				return 0, 0, "", start, fmt.Errorf("interval bound %d exceeds RE_DUP_MAX=%d", n, reDupMax)
+				return 0, 0, "", start, invalidInterval("interval bound %d exceeds RE_DUP_MAX=%d", n, reDupMax)
 			}
 			if pos >= len(s) || s[pos] != '}' {
 				return 0, 0, "", start, fmt.Errorf("malformed interval syntax")
 			}
 			if m > n {
-				return 0, 0, "", start, fmt.Errorf("invalid interval bounds: min %d > max %d", m, n)
+				return 0, 0, "", start, invalidInterval("invalid interval bounds: min %d > max %d", m, n)
 			}
 			pos++
 			return m, n, fmt.Sprintf("{%d,%d}", m, n), pos, nil
@@ -241,22 +253,12 @@ func parseDecimal(s string, pos int) (int, int, error) {
 	for pos < len(s) && s[pos] >= '0' && s[pos] <= '9' {
 		digit := int(s[pos] - '0')
 		if val > (math.MaxInt-digit)/10 {
-			return 0, pos, fmt.Errorf("interval bound overflow")
+			return 0, pos, invalidInterval("interval bound overflow")
 		}
 		val = val*10 + digit
 		pos++
 	}
 	return val, pos, nil
-}
-
-func checkedMul(a, b int) (int, error) {
-	if a == 0 || b == 0 {
-		return 0, nil
-	}
-	if a > math.MaxInt/b {
-		return 0, fmt.Errorf("interval arithmetic overflow")
-	}
-	return a * b, nil
 }
 
 func parseBracket(s string, pos int) (string, int, error) {
@@ -269,6 +271,10 @@ func parseBracket(s string, pos int) (string, int, error) {
 		pos++ // initial literal ']'
 	}
 	for pos < len(s) {
+		if s[pos] == '\\' && pos+1 < len(s) {
+			pos += 2
+			continue
+		}
 		if s[pos] == ']' {
 			pos++
 			return s[start:pos], pos, nil

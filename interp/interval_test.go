@@ -59,6 +59,21 @@ func TestIntervalExecution(t *testing.T) {
 		t.Fatalf("a{0002}{0003} match failed: out=%q, err=%v", out, err)
 	}
 
+	// UTF-8 atoms must be preserved as runes, not reconstructed byte-by-byte.
+	srcUnicode := `BEGIN { print match("éééééé", /é{0002}{0003}/), RLENGTH }`
+	out, err = execAWK(t, srcUnicode, "")
+	if err != nil || strings.TrimSpace(out) != "1 12" {
+		t.Fatalf("Unicode adjacent interval match failed: out=%q, err=%v", out, err)
+	}
+
+	// RE_DUP_MAX applies to each source interval, not the effective product of
+	// the gawk-compatible adjacent-duplication extension.
+	srcEffective := `BEGIN { print match("` + strings.Repeat("a", 400) + `", /a{20}{20}/), RLENGTH }`
+	out, err = execAWK(t, srcEffective, "")
+	if err != nil || strings.TrimSpace(out) != "1 400" {
+		t.Fatalf("effective repetition above RE_DUP_MAX failed: out=%q, err=%v", out, err)
+	}
+
 	src1Fail := `BEGIN { print match("aaaaa", /a{0002}{0003}/) }`
 	out, err = execAWK(t, src1Fail, "")
 	if err != nil || strings.TrimSpace(out) != "0" {

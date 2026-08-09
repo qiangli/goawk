@@ -19,6 +19,9 @@ func TestNormalizeSuccess(t *testing.T) {
 
 		// Compositions of quantifiers
 		{"a{0002}{0003}", "(?:a{2}){3}"},
+		{"a{20}{20}", "(?:a{20}){20}"},
+		{"é{0002}", "é{2}"},
+		{"é{2}{3}", "(?:é{2}){3}"},
 		{"a{2}{3}{4,}", "(?:(?:a{2}){3}){4,}"},
 		{"a{2,}{3}{4}", "(?:(?:a{2,}){3}){4}"},
 		{"a{2,3}{4}", "(?:a{2,3}){4}"},
@@ -40,6 +43,7 @@ func TestNormalizeSuccess(t *testing.T) {
 		{"[a-z[:digit:]]", "[a-z[:digit:]]"},
 		{"[]a{0002}]", "[]a{0002}]"},
 		{"[^]a{0002}]", "[^]a{0002}]"},
+		{`[a\]b{0002}]`, `[a\]b{0002}]`},
 
 		// Escapes
 		{"a\\{0002\\}", "a\\{0002\\}"},
@@ -69,21 +73,8 @@ func TestNormalizeError(t *testing.T) {
 		"a{999999999999999999999999999999}",
 		"a{10000000000000000000,20000000000000000000}",
 
-		// Oversized composition bounds (>255)
-		"a{100}{3}",
-		"a{200}{200}",
-
-		// Malformed bounds & syntax
+		// A syntactically valid interval with inverted bounds is invalid.
 		"a{5,2}",
-		"a{2,3,4}",
-		"a{2,a}",
-		"a{,2}",
-		"a{-2}",
-		"{2}",
-		"a|{2}",
-		"({2})",
-		"a{2",
-		"a\\",
 	}
 
 	for _, input := range tests {
@@ -91,6 +82,33 @@ func TestNormalizeError(t *testing.T) {
 			got, err := regex.Normalize(input)
 			if err == nil {
 				t.Fatalf("Normalize(%q) = %q, expected error", input, got)
+			}
+		})
+	}
+}
+
+func TestNormalizeLeavesNonIntervalsForBackend(t *testing.T) {
+	inputs := []string{
+		"a{",
+		"a{2",
+		"a{2,3,4}",
+		"a{2,a}",
+		"a{,2}",
+		"a{-2}",
+		"{2}",
+		"a|{2}",
+		"({2})",
+		"a\\",
+		"[a-",
+	}
+	for _, input := range inputs {
+		t.Run(input, func(t *testing.T) {
+			got, err := regex.Normalize(input)
+			if err != nil {
+				t.Fatalf("Normalize(%q) error = %v, want backend-owned validation", input, err)
+			}
+			if got != input {
+				t.Fatalf("Normalize(%q) = %q, want byte-identical input", input, got)
 			}
 		})
 	}
