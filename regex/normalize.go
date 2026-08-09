@@ -302,5 +302,5 @@ func parseBracket(s string, pos int) (string, int, error) {
 		}
 		pos++
 	}
-	return s[start:], len(s), nil
+	return "", start, fmt.Errorf("unclosed bracket expression")
 }

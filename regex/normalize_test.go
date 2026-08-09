@@ -100,6 +100,7 @@ func TestNormalizeLeavesNonIntervalsForBackend(t *testing.T) {
 		"({2})",
 		"a\\",
 		"[a-",
+		"a{0002}[a-",
 	}
 	for _, input := range inputs {
 		t.Run(input, func(t *testing.T) {
