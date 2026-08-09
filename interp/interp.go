@@ -864,7 +864,11 @@ func (p *interp) setSpecial(index int, v value) error {
 	case ast.V_FS:
 		p.fieldSep = p.toString(v)
 		if utf8.RuneCountInString(p.fieldSep) > 1 { // compare to interp.ensureFields
-			re, err := regexp.Compile(compiler.AddRegexFlags(p.fieldSep))
+			norm, err := regex.Normalize(p.fieldSep)
+			if err != nil {
+				return newError("invalid regex %q: %s", p.fieldSep, err)
+			}
+			re, err := regexp.Compile(compiler.AddRegexFlags(norm))
 			if err != nil {
 				return newError("invalid regex %q: %s", p.fieldSep, err)
 			}
@@ -892,7 +896,11 @@ func (p *interp) setSpecial(index int, v value) error {
 			p.recordSepRegex = regexp.MustCompile(sep)
 			p.recordSepRegex.Longest() // other awks use leftmost-longest matching
 		default:
-			re, err := regexp.Compile(compiler.AddRegexFlags(p.recordSep))
+			norm, err := regex.Normalize(p.recordSep)
+			if err != nil {
+				return newError("invalid regex %q: %s", p.recordSep, err)
+			}
+			re, err := regexp.Compile(compiler.AddRegexFlags(norm))
 			if err != nil {
 				return newError("invalid regex %q: %s", p.recordSep, err)
 			}
@@ -1054,7 +1062,12 @@ func (p *interp) compileRegexStd(regexStr string) (*regexp.Regexp, error) {
 		return re, nil
 	}
 
-	re, err := regexp.Compile(compiler.AddRegexFlags(regexStr))
+	norm, err := regex.Normalize(regexStr)
+	if err != nil {
+		return nil, newError("invalid regex %q: %s", regexStr, err)
+	}
+
+	re, err := regexp.Compile(compiler.AddRegexFlags(norm))
 	if err != nil {
 		return nil, newError("invalid regex %q: %s", regexStr, err)
 	}

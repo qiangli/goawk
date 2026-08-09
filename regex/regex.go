@@ -22,8 +22,12 @@ type Compiler interface {
 type defaultCompiler struct{}
 
 func (defaultCompiler) Compile(expr string) (Regexp, error) {
+	norm, err := Normalize(expr)
+	if err != nil {
+		return nil, err
+	}
 	// GoAWK regexes require the "s" flag so '.' matches '\n' (like other AWKs)
-	re, err := regexp.Compile("(?s:" + expr + ")")
+	re, err := regexp.Compile("(?s:" + norm + ")")
 	if err != nil {
 		// Return the original compile error which might have a different offset
 		// if we just blindly prepend, but actually GoAWK's original AddRegexFlags
