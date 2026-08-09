@@ -21,6 +21,9 @@ type Program struct {
 	Nums      []float64
 	Strs      []string
 	Regexes   []regex.Regexp
+	// RegexCompiler is retained so dynamic expressions use the same backend
+	// that compiled the program's regular expression literals.
+	RegexCompiler regex.Compiler
 
 	// For disassembly
 	scalarNames     []string
@@ -72,18 +75,18 @@ func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *
 		}
 	}()
 
-	p := &Program{}
+	regexCompiler := regex.DefaultCompiler()
+	if config != nil && config.RegexCompiler != nil {
+		regexCompiler = config.RegexCompiler
+	}
+	p := &Program{RegexCompiler: regexCompiler}
 
 	// Reuse identical constants across entire program.
-	c := &compiler{
-		resolved:      resolved,
-		program:       p,
-		indexes: constantIndexes{
-			nums:    make(map[float64]int),
-			strs:    make(map[string]int),
-			regexes: make(map[string]int),
-			config:  config,
-		},
+	indexes := constantIndexes{
+		nums:          make(map[float64]int),
+		strs:          make(map[string]int),
+		regexes:       make(map[string]int),
+		regexCompiler: regexCompiler,
 	}
 
 	// Compile functions. For functions called before they're defined or
@@ -110,14 +113,14 @@ func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *
 		p.Functions[i] = compiledFunc
 	}
 	for i, astFunc := range resolved.Functions {
-		c := compiler{resolved: resolved, program: p, indexes: c.indexes, funcName: astFunc.Name}
+		c := compiler{resolved: resolved, program: p, indexes: indexes, funcName: astFunc.Name}
 		c.stmts(astFunc.Body)
 		p.Functions[i].Body = c.finish()
 	}
 
 	// Compile BEGIN blocks.
 	for _, stmts := range resolved.Begin {
-		c := compiler{resolved: resolved, program: p, indexes: c.indexes}
+		c := compiler{resolved: resolved, program: p, indexes: indexes}
 		c.stmts(stmts)
 		p.Begin = append(p.Begin, c.finish()...)
 	}
@@ -129,14 +132,14 @@ func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *
 		case 0:
 			// Always considered a match
 		case 1:
-			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
+			c := compiler{resolved: resolved, program: p, indexes: indexes}
 			c.expr(action.Pattern[0])
 			pattern = [][]Opcode{c.finish()}
 		case 2:
-			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
+			c := compiler{resolved: resolved, program: p, indexes: indexes}
 			c.expr(action.Pattern[0])
 			pattern = append(pattern, c.finish())
-			c = compiler{resolved: resolved, program: p, indexes: c.indexes}
+			c = compiler{resolved: resolved, program: p, indexes: indexes}
 			c.expr(action.Pattern[1])
 			pattern = append(pattern, c.finish())
 		}
@@ -148,12 +151,12 @@ func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *
 			// Empty action block (a bare '{}') should have at least one
 			// opcode, otherwise interpreter will treat it as no action, which
 			// would be evaluated as '{ print $0 }'.
-			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
+			c := compiler{resolved: resolved, program: p, indexes: indexes}
 			c.add(Nop)
 			body = c.finish()
 		default:
 			// Regular body such as `{ print $1 }`
-			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
+			c := compiler{resolved: resolved, program: p, indexes: indexes}
 			c.stmts(action.Stmts)
 			body = c.finish()
 		}
@@ -165,7 +168,7 @@ func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *
 
 	// Compile END blocks.
 	for _, stmts := range resolved.End {
-		c := compiler{resolved: resolved, program: p, indexes: c.indexes}
+		c := compiler{resolved: resolved, program: p, indexes: indexes}
 		if len(stmts) > 0 {
 			c.stmts(stmts)
 		} else {
@@ -205,9 +208,7 @@ type constantIndexes struct {
 	nums          map[float64]int
 	strs          map[string]int
 	regexes       map[string]int
-	scalarIndexes map[string]int
-	arrayIndexes  map[string]int
-	config        *Config
+	regexCompiler regex.Compiler
 }
 
 // Holds the compilation state.
@@ -1111,14 +1112,13 @@ func (c *compiler) addRegex(r string) int {
 	}
 	var re regex.Regexp
 	var err error
-	if c.indexes.config != nil && c.indexes.config.RegexCompiler != nil {
-		re, err = c.indexes.config.RegexCompiler.Compile(r)
-	} else {
-		re, err = regex.DefaultCompiler.Compile(r)
-	}
+	re, err = c.indexes.regexCompiler.Compile(r)
 	if err != nil {
 		// Should have been caught by parser, but just in case
 		panic(&compileError{message: fmt.Sprintf("invalid regex %q: %s", r, err)})
+	}
+	if re == nil {
+		panic(&compileError{message: fmt.Sprintf("invalid regex %q: compiler returned nil", r)})
 	}
 	index := len(c.program.Regexes)
 	c.program.Regexes = append(c.program.Regexes, re)

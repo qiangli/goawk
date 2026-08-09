@@ -2,14 +2,18 @@ package regex
 
 import "regexp"
 
-// Regexp is the interface for a compiled regular expression.
+// Regexp is the regular expression surface used by GoAWK's expression
+// operators. String must return a stable representation for diagnostics and
+// disassembly.
 type Regexp interface {
 	String() string
 	MatchString(s string) bool
 	FindStringIndex(s string) []int
 }
 
-// Compiler is a factory for compiling regular expressions.
+// Compiler compiles AWK extended regular expressions. Implementations must
+// use leftmost-longest matching and allow period to match newline, matching
+// the semantics of GoAWK's standard-library backend.
 type Compiler interface {
 	Compile(expr string) (Regexp, error)
 }
@@ -30,5 +34,7 @@ func (defaultCompiler) Compile(expr string) (Regexp, error) {
 	return re, nil
 }
 
-// DefaultCompiler is a regex.Compiler that uses the Go standard library.
-var DefaultCompiler Compiler = defaultCompiler{}
+// DefaultCompiler returns a Compiler backed by Go's regexp package.
+func DefaultCompiler() Compiler {
+	return defaultCompiler{}
+}

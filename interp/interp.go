@@ -335,10 +335,6 @@ type Config struct {
 	// errors.Is(err, fs.ErrNotExist) for files that don't exist when flag is
 	// os.O_RDONLY.
 	OpenFile OpenFileFunc
-
-	// RegexCompiler specifies the backend to use for regex compilation.
-	// If nil, it defaults to the Go standard library regexp package.
-	RegexCompiler regex.Compiler
 }
 
 // OpenFileFunc is the type used for setting [Config.OpenFile], and is the type
@@ -404,11 +400,12 @@ func ExecProgram(program *parser.Program, config *Config) (int, error) {
 
 func newInterp(program *parser.Program) *interp {
 	p := &interp{
-		program:   program,
-		functions: program.Compiled.Functions,
-		nums:      program.Compiled.Nums,
-		strs:      program.Compiled.Strs,
-		regexes:   program.Compiled.Regexes,
+		program:       program,
+		functions:     program.Compiled.Functions,
+		nums:          program.Compiled.Nums,
+		strs:          program.Compiled.Strs,
+		regexes:       program.Compiled.Regexes,
+		regexCompiler: program.Compiled.RegexCompiler,
 	}
 
 	// Allocate memory for variables and virtual machine stack
@@ -461,7 +458,6 @@ func (p *interp) setExecuteConfig(config *Config) error {
 	if config == nil {
 		config = &Config{}
 	}
-	p.regexCompiler = config.RegexCompiler
 	if len(config.Vars)%2 != 0 {
 		return newError("length of config.Vars must be a multiple of 2, not %d", len(config.Vars))
 	}
@@ -1077,21 +1073,18 @@ func (p *interp) compileRegex(regexStr string) (regex.Regexp, error) {
 		return re, nil
 	}
 
-	var re regex.Regexp
-	var err error
-	if p.regexCompiler != nil {
-		re, err = p.regexCompiler.Compile(regexStr)
-	} else {
-		re, err = regex.DefaultCompiler.Compile(regexStr)
-	}
+	re, err := p.regexCompiler.Compile(regexStr)
 	if err != nil {
 		return nil, newError("invalid regex %q: %s", regexStr, err)
 	}
-
-	if len(p.regexCache) >= maxCachedRegexes {
-		p.regexCache = make(map[string]regex.Regexp, 10)
+	if re == nil {
+		return nil, newError("invalid regex %q: compiler returned nil", regexStr)
 	}
-	p.regexCache[regexStr] = re
+
+	// Dumb, non-LRU cache: just cache the first N regexes.
+	if len(p.regexCache) < maxCachedRegexes {
+		p.regexCache[regexStr] = re
+	}
 	return re, nil
 }
 

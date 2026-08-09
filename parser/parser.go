@@ -45,8 +45,12 @@ type ParserConfig struct {
 	// on interp.Config.Funcs for details.
 	Funcs map[string]any
 
-	// RegexCompiler specifies the backend to use for regex compilation.
-	// If nil, it defaults to the Go standard library regexp package.
+	// RegexCompiler specifies the backend used for regular expression
+	// literals and dynamic expression operators (~, !~, and match). The
+	// selected compiler is retained by the returned Program for its entire
+	// lifetime, including repeated interpreter executions. If nil, GoAWK uses
+	// its standard-library regexp backend. FS, RS, split, sub, and gsub are not
+	// affected by this first-slice extension.
 	RegexCompiler regex.Compiler
 }
 
@@ -1046,14 +1050,18 @@ func (p *parser) nextRegex() string {
 		panic(p.errorf("%s", p.val))
 	}
 	regexStr := p.val
+	var re regex.Regexp
 	var err error
 	if p.config != nil && p.config.RegexCompiler != nil {
-		_, err = p.config.RegexCompiler.Compile(regexStr)
+		re, err = p.config.RegexCompiler.Compile(regexStr)
 	} else {
-		_, err = regex.DefaultCompiler.Compile(regexStr)
+		re, err = regex.DefaultCompiler().Compile(regexStr)
 	}
 	if err != nil {
 		panic(p.errorf("%v", err))
+	}
+	if re == nil {
+		panic(p.errorf("regex compiler returned nil"))
 	}
 	p.next()
 	return regexStr
