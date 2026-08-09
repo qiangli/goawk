@@ -4,12 +4,12 @@ package compiler
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"strconv"
 
 	"github.com/benhoyt/goawk/internal/ast"
 	"github.com/benhoyt/goawk/internal/resolver"
 	"github.com/benhoyt/goawk/lexer"
+	"github.com/benhoyt/goawk/regex"
 )
 
 // Program holds an entire compiled program.
@@ -20,7 +20,7 @@ type Program struct {
 	Functions []Function
 	Nums      []float64
 	Strs      []string
-	Regexes   []*regexp.Regexp
+	Regexes   []regex.Regexp
 
 	// For disassembly
 	scalarNames     []string
@@ -55,8 +55,13 @@ func (e *compileError) Error() string {
 	return e.message
 }
 
-// Compile compiles an AST (parsed program) into virtual machine instructions.
-func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err error) {
+// Config holds compiler configuration.
+type Config struct {
+	RegexCompiler regex.Compiler
+}
+
+// Compile compiles a resolved abstract syntax tree to a virtual machine program.
+func Compile(resolved *resolver.ResolvedProgram, config *Config) (compiledProg *Program, err error) {
 	defer func() {
 		// The compiler uses panic with a *compileError to signal compile
 		// errors internally, and they're caught here. This avoids the
@@ -70,10 +75,15 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 	p := &Program{}
 
 	// Reuse identical constants across entire program.
-	indexes := constantIndexes{
-		nums:    make(map[float64]int),
-		strs:    make(map[string]int),
-		regexes: make(map[string]int),
+	c := &compiler{
+		resolved:      resolved,
+		program:       p,
+		indexes: constantIndexes{
+			nums:    make(map[float64]int),
+			strs:    make(map[string]int),
+			regexes: make(map[string]int),
+			config:  config,
+		},
 	}
 
 	// Compile functions. For functions called before they're defined or
@@ -100,14 +110,14 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 		p.Functions[i] = compiledFunc
 	}
 	for i, astFunc := range resolved.Functions {
-		c := compiler{resolved: resolved, program: p, indexes: indexes, funcName: astFunc.Name}
+		c := compiler{resolved: resolved, program: p, indexes: c.indexes, funcName: astFunc.Name}
 		c.stmts(astFunc.Body)
 		p.Functions[i].Body = c.finish()
 	}
 
 	// Compile BEGIN blocks.
 	for _, stmts := range resolved.Begin {
-		c := compiler{resolved: resolved, program: p, indexes: indexes}
+		c := compiler{resolved: resolved, program: p, indexes: c.indexes}
 		c.stmts(stmts)
 		p.Begin = append(p.Begin, c.finish()...)
 	}
@@ -119,14 +129,14 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 		case 0:
 			// Always considered a match
 		case 1:
-			c := compiler{resolved: resolved, program: p, indexes: indexes}
+			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
 			c.expr(action.Pattern[0])
 			pattern = [][]Opcode{c.finish()}
 		case 2:
-			c := compiler{resolved: resolved, program: p, indexes: indexes}
+			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
 			c.expr(action.Pattern[0])
 			pattern = append(pattern, c.finish())
-			c = compiler{resolved: resolved, program: p, indexes: indexes}
+			c = compiler{resolved: resolved, program: p, indexes: c.indexes}
 			c.expr(action.Pattern[1])
 			pattern = append(pattern, c.finish())
 		}
@@ -138,12 +148,12 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 			// Empty action block (a bare '{}') should have at least one
 			// opcode, otherwise interpreter will treat it as no action, which
 			// would be evaluated as '{ print $0 }'.
-			c := compiler{resolved: resolved, program: p, indexes: indexes}
+			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
 			c.add(Nop)
 			body = c.finish()
 		default:
 			// Regular body such as `{ print $1 }`
-			c := compiler{resolved: resolved, program: p, indexes: indexes}
+			c := compiler{resolved: resolved, program: p, indexes: c.indexes}
 			c.stmts(action.Stmts)
 			body = c.finish()
 		}
@@ -155,7 +165,7 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 
 	// Compile END blocks.
 	for _, stmts := range resolved.End {
-		c := compiler{resolved: resolved, program: p, indexes: indexes}
+		c := compiler{resolved: resolved, program: p, indexes: c.indexes}
 		if len(stmts) > 0 {
 			c.stmts(stmts)
 		} else {
@@ -192,9 +202,12 @@ func Compile(resolved *resolver.ResolvedProgram) (compiledProg *Program, err err
 
 // So we can look up the indexes of constants that have been used before.
 type constantIndexes struct {
-	nums    map[float64]int
-	strs    map[string]int
-	regexes map[string]int
+	nums          map[float64]int
+	strs          map[string]int
+	regexes       map[string]int
+	scalarIndexes map[string]int
+	arrayIndexes  map[string]int
+	config        *Config
 }
 
 // Holds the compilation state.
@@ -704,7 +717,7 @@ func (c *compiler) expr(expr ast.Expr) {
 		}
 
 	case *ast.RegExpr:
-		c.add(Regex, opcodeInt(c.regexIndex(e.Regex)))
+		c.add(Regex, opcodeInt(c.addRegex(e.Regex)))
 
 	case *ast.BinaryExpr:
 		// && and || are special cases as they're short-circuit operators.
@@ -1092,13 +1105,22 @@ func (c *compiler) strIndex(s string) int {
 }
 
 // Add (or reuse) a regex constant and returns its index.
-func (c *compiler) regexIndex(r string) int {
+func (c *compiler) addRegex(r string) int {
 	if index, ok := c.indexes.regexes[r]; ok {
 		return index // reuse existing constant
 	}
+	var re regex.Regexp
+	var err error
+	if c.indexes.config != nil && c.indexes.config.RegexCompiler != nil {
+		re, err = c.indexes.config.RegexCompiler.Compile(r)
+	} else {
+		re, err = regex.DefaultCompiler.Compile(r)
+	}
+	if err != nil {
+		// Should have been caught by parser, but just in case
+		panic(&compileError{message: fmt.Sprintf("invalid regex %q: %s", r, err)})
+	}
 	index := len(c.program.Regexes)
-	re := regexp.MustCompile(AddRegexFlags(r))
-	re.Longest() // other awks use leftmost-longest matching
 	c.program.Regexes = append(c.program.Regexes, re)
 	c.indexes.regexes[r] = index
 	return index

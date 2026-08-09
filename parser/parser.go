@@ -7,7 +7,6 @@ package parser
 import (
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/benhoyt/goawk/internal/compiler"
 	"github.com/benhoyt/goawk/internal/resolver"
 	"github.com/benhoyt/goawk/lexer"
+	"github.com/benhoyt/goawk/regex"
 )
 
 // ParseError (actually *ParseError) is the type of error returned by
@@ -44,6 +44,10 @@ type ParserConfig struct {
 	// Map of named Go functions to allow calling from AWK. See docs
 	// on interp.Config.Funcs for details.
 	Funcs map[string]any
+
+	// RegexCompiler specifies the backend to use for regex compilation.
+	// If nil, it defaults to the Go standard library regexp package.
+	RegexCompiler regex.Compiler
 }
 
 func (c *ParserConfig) toResolverConfig() *resolver.Config {
@@ -75,7 +79,7 @@ func ParseProgram(src []byte, config *ParserConfig) (prog *Program, err error) {
 		}
 	}()
 	lex := lexer.NewLexer(src)
-	p := parser{lexer: lex}
+	p := parser{lexer: lex, config: config}
 	p.multiExprs = make(map[*ast.MultiExpr]lexer.Position, 3)
 
 	p.next() // initialize p.tok
@@ -88,7 +92,11 @@ func ParseProgram(src []byte, config *ParserConfig) (prog *Program, err error) {
 	prog.ResolvedProgram = *resolver.Resolve(astProg, config.toResolverConfig())
 
 	// Compile to virtual machine code
-	prog.Compiled, err = compiler.Compile(&prog.ResolvedProgram)
+	var compConfig *compiler.Config
+	if config != nil && config.RegexCompiler != nil {
+		compConfig = &compiler.Config{RegexCompiler: config.RegexCompiler}
+	}
+	prog.Compiled, err = compiler.Compile(&prog.ResolvedProgram, compConfig)
 	return prog, err
 }
 
@@ -122,6 +130,7 @@ type parser struct {
 	tok     lexer.Token    // last lexed token
 	prevTok lexer.Token    // previously lexed token
 	val     string         // string value of last token (or "")
+	config  *ParserConfig  // parser configuration
 
 	// Parsing state
 	inAction           bool     // true if parsing an action (false in BEGIN or END)
@@ -1036,13 +1045,18 @@ func (p *parser) nextRegex() string {
 	if p.tok == lexer.ILLEGAL {
 		panic(p.errorf("%s", p.val))
 	}
-	regex := p.val
-	_, err := regexp.Compile(compiler.AddRegexFlags(regex))
+	regexStr := p.val
+	var err error
+	if p.config != nil && p.config.RegexCompiler != nil {
+		_, err = p.config.RegexCompiler.Compile(regexStr)
+	} else {
+		_, err = regex.DefaultCompiler.Compile(regexStr)
+	}
 	if err != nil {
 		panic(p.errorf("%v", err))
 	}
 	p.next()
-	return regex
+	return regexStr
 }
 
 // Ensure current token is tok, and parse next token into p.tok.

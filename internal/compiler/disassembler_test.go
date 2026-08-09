@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"bytes"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -25,7 +24,7 @@ func TestDisassembler(t *testing.T) {
 				},
 				Nums:            []float64{0},
 				Strs:            []string{""},
-				Regexes:         []*regexp.Regexp{regexp.MustCompile("")},
+				Regexes:         []regex.Regexp{regexp.MustCompile("")},
 				scalarNames:     []string{"s"},
 				arrayNames:      []string{"a"},
 				nativeFuncNames: []string{"n"},
