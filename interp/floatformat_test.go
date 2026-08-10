@@ -73,3 +73,42 @@ func TestSprintfNegativeDynamicPrecisionIsOmitted(t *testing.T) {
 		})
 	}
 }
+
+// POSIX requires "%#o" to print a single "0" for a zero value even when the
+// precision is zero, whereas Go's fmt yields an empty string. See
+// normalizeOctalHashZeroPrecision.
+func TestSprintfOctalHashZeroPrecision(t *testing.T) {
+	p := &interp{formatCache: make(map[string]cachedFormat)}
+	tests := []struct {
+		name   string
+		format string
+		args   []value
+		want   string
+	}{
+		{"static zero precision zero value", "%#.0o", []value{num(0)}, "0"},
+		{"static zero precision nonzero value", "%#.0o", []value{num(8)}, "010"},
+		{"dynamic zero precision zero value", "%#.*o", []value{num(0), num(0)}, "0"},
+		{"dynamic zero precision nonzero value", "%#.*o", []value{num(0), num(8)}, "010"},
+		{"positive precision zero value preserved", "%#.3o", []value{num(0)}, "000"},
+		{"dynamic positive precision preserved", "%#.*o", []value{num(3), num(0)}, "000"},
+		{"width right justified", "%#5.0o", []value{num(0)}, "    0"},
+		{"width left justified", "%#-5.0o", []value{num(0)}, "0    "},
+		{"zero flag suppressed by precision", "%#05.0o", []value{num(0)}, "    0"},
+		{"plain zero precision stays empty", "%.0o", []value{num(0)}, ""},
+		{"plain dynamic zero precision stays empty", "%.*o", []value{num(0), num(0)}, ""},
+		{"no hash flag no change nonzero", "%.0o", []value{num(8)}, "10"},
+		{"other verb unaffected", "%#.0x", []value{num(0)}, ""},
+		{"multiple conversions", "%#.0o-%#.*o", []value{num(0), num(0), num(8)}, "0-010"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := p.sprintf(test.format, test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("sprintf(%q, %v) = %q, want %q", test.format, test.args, got, test.want)
+			}
+		})
+	}
+}

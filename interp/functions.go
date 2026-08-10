@@ -393,6 +393,86 @@ func normalizeNegativeDynamicPrecisions(format string, args []value) (string, []
 	return string(out), filtered
 }
 
+// normalizeOctalHashZeroPrecision works around a divergence between Go's fmt
+// package and C/POSIX printf for the "%#o" conversion. POSIX specifies that
+// the '#' flag forces the first octal digit to be zero, and that when both the
+// value and the precision are zero a single "0" is still printed. Go's fmt
+// instead yields an empty string for "%#.0o" (and "%#.*o" with a zero
+// precision argument) when the value is zero. Rewriting an explicit zero
+// precision to 1 reproduces the POSIX result for a zero value while leaving
+// non-zero values (and every other verb) untouched; because a precision is
+// still specified, the '0' (zero-pad) flag stays suppressed as POSIX requires.
+// Plain "%.0o" (no '#') is deliberately left alone so it keeps emitting the
+// empty string mandated by POSIX.
+func normalizeOctalHashZeroPrecision(format string, args []value) (string, []value) {
+	if !strings.Contains(format, "#") {
+		return format, args
+	}
+	out := []byte(format)
+	drop := make([]bool, len(args))
+	argIndex := 0
+	changed := false
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		if format[i] == '%' {
+			continue
+		}
+		hash := false
+		precZeroPos := -1  // index in out of a static ".0" precision digit
+		precStarPos := -1  // index in out of a dynamic ".*" precision
+		precStarArg := -1
+		for i < len(format) && strings.IndexByte(" .-+*#0123456789", format[i]) >= 0 {
+			switch {
+			case format[i] == '#':
+				hash = true
+			case format[i] == '*':
+				if i > 0 && format[i-1] == '.' {
+					precStarPos = i
+					precStarArg = argIndex
+				}
+				argIndex++
+			case i > 0 && format[i-1] == '.' && format[i] == '0':
+				precZeroPos = i
+			default:
+				precZeroPos = -1 // any other precision digit is non-zero
+			}
+			i++
+		}
+		if i >= len(format) {
+			break
+		}
+		verb := format[i]
+		argIndex++ // conversion operand
+		if hash && verb == 'o' {
+			switch {
+			case precZeroPos >= 0:
+				out[precZeroPos] = '1'
+				changed = true
+			case precStarPos >= 0 && precStarArg < len(args) && int64(args[precStarArg].num()) == 0:
+				out[precStarPos] = '1'
+				drop[precStarArg] = true
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return format, args
+	}
+	filtered := make([]value, 0, len(args))
+	for i, arg := range args {
+		if !drop[i] {
+			filtered = append(filtered, arg)
+		}
+	}
+	return string(out), filtered
+}
+
 // Parse given sprintf format string into Go format string, along with
 // type conversion specifiers. Output is memoized in a simple cache
 // for performance.
@@ -464,6 +544,7 @@ func (p *interp) parseFmtTypes(s string) (format string, types []byte, err error
 // Guts of sprintf() function (also used by "printf" statement)
 func (p *interp) sprintf(format string, args []value) (string, error) {
 	format, args = normalizeNegativeDynamicPrecisions(format, args)
+	format, args = normalizeOctalHashZeroPrecision(format, args)
 	format, types, err := p.parseFmtTypes(format)
 	if err != nil {
 		return "", newError("format error: %s", err)
