@@ -118,10 +118,13 @@ NR==3, NR==5 { print NR }
 	// value (static ".0" and dynamic ".*"), while non-zero values keep their
 	// leading-zero form and plain %.0o stays empty.
 	{`BEGIN { printf "<%#.0o><%#.0o>", 0, 8 }`, "", "<0><010>", "", ""},
+	{`BEGIN { printf "<%#.00o><%#.000o>", 0, 0 }`, "", "<0><0>", "", ""},
 	{`BEGIN { printf "<%#.*o><%#.*o>", 0, 0, 0, 8 }`, "", "<0><010>", "", ""},
 	{`BEGIN { printf "<%#.*o>", 3, 0 }`, "", "<000>", "", ""},
 	{`BEGIN { printf "<%#5.0o><%#-5.0o><%#05.0o>", 0, 0, 0 }`, "", "<    0><0    ><    0>", "", ""},
 	{`BEGIN { printf "<%.0o>", 0 }`, "", "<>", "", ""},
+	{`BEGIN { print sprintf("<%#.0o><%#.00o><%#.000o><%#.*o><%.0o>", 0, 0, 0, 0, 0, 0) }`, "", "<0><0><0><0><>\n", "", ""},
+	{`BEGIN { print sprintf("%%:<%#*.*o><%#.*o><%#.*o>", 5, 0, 0, -1, 0, .5, 0) }`, "", "%:<    0><0><0>\n", "", ""},
 
 	// if and loop statements
 	{`BEGIN { if (1) print "t"; }`, "", "t\n", "", ""},

@@ -4,7 +4,6 @@ package interp
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -334,19 +333,24 @@ type cachedFormat struct {
 	types  []byte
 }
 
-// POSIX specifies that a negative precision supplied by * is treated as if
-// the precision were omitted. Go's fmt package instead emits %!(BADPREC), so
-// remove the precision and its argument before handing the format to fmt.
-func normalizeNegativeDynamicPrecisions(format string, args []value) (string, []value) {
-	if !strings.Contains(format, ".*") {
-		return format, args
-	}
-	out := make([]byte, 0, len(format))
-	drop := make([]bool, len(args))
+type printfConversion struct {
+	hash           bool
+	verb           byte
+	precisionDot   int
+	precisionStart int
+	precisionEnd   int
+	precisionStar  bool
+	precisionArg   int
+	operandArg     int
+}
+
+// scanPrintfConversions performs the shared, complete token scan needed by
+// format normalizers. It tracks width/precision * arguments independently and
+// records the entire static precision token (including .00 and .000).
+func scanPrintfConversions(format string) []printfConversion {
+	var conversions []printfConversion
 	argIndex := 0
-	changed := false
 	for i := 0; i < len(format); {
-		out = append(out, format[i])
 		if format[i] != '%' {
 			i++
 			continue
@@ -355,42 +359,102 @@ func normalizeNegativeDynamicPrecisions(format string, args []value) (string, []
 		if i >= len(format) {
 			break
 		}
-		out = append(out, format[i])
 		if format[i] == '%' {
 			i++
 			continue
 		}
-		for bytes.IndexByte([]byte(" .-+*#0123456789"), format[i]) >= 0 {
-			if format[i] == '*' {
-				isPrecision := i > 0 && format[i-1] == '.'
-				if isPrecision && argIndex < len(args) && int64(args[argIndex].num()) < 0 {
-					out = out[:len(out)-2] // remove the copied .* pair
-					drop[argIndex] = true
-					changed = true
-				}
+
+		conv := printfConversion{precisionDot: -1, precisionArg: -1}
+		for i < len(format) && strings.IndexByte(" +-#0", format[i]) >= 0 {
+			conv.hash = conv.hash || format[i] == '#'
+			i++
+		}
+		if i < len(format) && format[i] == '*' {
+			argIndex++
+			i++
+		} else {
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				i++
+			}
+		}
+		if i < len(format) && format[i] == '.' {
+			conv.precisionDot = i
+			i++
+			conv.precisionStart = i
+			if i < len(format) && format[i] == '*' {
+				conv.precisionStar = true
+				conv.precisionArg = argIndex
 				argIndex++
+				i++
+			} else {
+				for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+					i++
+				}
 			}
-			i++
-			if i >= len(format) {
-				break
-			}
-			out = append(out, format[i])
+			conv.precisionEnd = i
 		}
-		if i < len(format) {
-			argIndex++ // conversion operand
-			i++
+		if i >= len(format) {
+			break
 		}
+		conv.verb = format[i]
+		conv.operandArg = argIndex
+		argIndex++
+		conversions = append(conversions, conv)
+		i++
 	}
-	if !changed {
-		return format, args
+	return conversions
+}
+
+type formatEdit struct {
+	start, end  int
+	replacement string
+}
+
+func applyFormatEdits(format string, edits []formatEdit) string {
+	if len(edits) == 0 {
+		return format
 	}
+	var out strings.Builder
+	last := 0
+	for _, edit := range edits {
+		out.WriteString(format[last:edit.start])
+		out.WriteString(edit.replacement)
+		last = edit.end
+	}
+	out.WriteString(format[last:])
+	return out.String()
+}
+
+func dropFormatArgs(args []value, drop []bool) []value {
 	filtered := make([]value, 0, len(args))
 	for i, arg := range args {
 		if !drop[i] {
 			filtered = append(filtered, arg)
 		}
 	}
-	return string(out), filtered
+	return filtered
+}
+
+// POSIX specifies that a negative precision supplied by * is treated as if
+// the precision were omitted. Go's fmt package instead emits %!(BADPREC), so
+// remove the precision and its argument before handing the format to fmt.
+func normalizeNegativeDynamicPrecisions(format string, args []value) (string, []value) {
+	if !strings.Contains(format, ".*") {
+		return format, args
+	}
+	var edits []formatEdit
+	drop := make([]bool, len(args))
+	for _, conv := range scanPrintfConversions(format) {
+		if conv.precisionStar && conv.precisionArg < len(args) &&
+			int64(args[conv.precisionArg].num()) < 0 {
+			edits = append(edits, formatEdit{conv.precisionDot, conv.precisionEnd, ""})
+			drop[conv.precisionArg] = true
+		}
+	}
+	if len(edits) == 0 {
+		return format, args
+	}
+	return applyFormatEdits(format, edits), dropFormatArgs(args, drop)
 }
 
 // normalizeOctalHashZeroPrecision works around a divergence between Go's fmt
@@ -408,69 +472,32 @@ func normalizeOctalHashZeroPrecision(format string, args []value) (string, []val
 	if !strings.Contains(format, "#") {
 		return format, args
 	}
-	out := []byte(format)
+	var edits []formatEdit
 	drop := make([]bool, len(args))
-	argIndex := 0
-	changed := false
-	for i := 0; i < len(format); i++ {
-		if format[i] != '%' {
+	for _, conv := range scanPrintfConversions(format) {
+		if !conv.hash || conv.verb != 'o' || conv.precisionDot < 0 ||
+			conv.operandArg >= len(args) || int64(args[conv.operandArg].num()) != 0 {
 			continue
 		}
-		i++
-		if i >= len(format) {
-			break
-		}
-		if format[i] == '%' {
+		if conv.precisionStar {
+			if conv.precisionArg < len(args) && int64(args[conv.precisionArg].num()) == 0 {
+				edits = append(edits, formatEdit{conv.precisionStart, conv.precisionEnd, "1"})
+				drop[conv.precisionArg] = true
+			}
 			continue
 		}
-		hash := false
-		precZeroPos := -1  // index in out of a static ".0" precision digit
-		precStarPos := -1  // index in out of a dynamic ".*" precision
-		precStarArg := -1
-		for i < len(format) && strings.IndexByte(" .-+*#0123456789", format[i]) >= 0 {
-			switch {
-			case format[i] == '#':
-				hash = true
-			case format[i] == '*':
-				if i > 0 && format[i-1] == '.' {
-					precStarPos = i
-					precStarArg = argIndex
-				}
-				argIndex++
-			case i > 0 && format[i-1] == '.' && format[i] == '0':
-				precZeroPos = i
-			default:
-				precZeroPos = -1 // any other precision digit is non-zero
-			}
-			i++
+		zero := true
+		for i := conv.precisionStart; i < conv.precisionEnd; i++ {
+			zero = zero && format[i] == '0'
 		}
-		if i >= len(format) {
-			break
-		}
-		verb := format[i]
-		argIndex++ // conversion operand
-		if hash && verb == 'o' {
-			switch {
-			case precZeroPos >= 0:
-				out[precZeroPos] = '1'
-				changed = true
-			case precStarPos >= 0 && precStarArg < len(args) && int64(args[precStarArg].num()) == 0:
-				out[precStarPos] = '1'
-				drop[precStarArg] = true
-				changed = true
-			}
+		if zero {
+			edits = append(edits, formatEdit{conv.precisionStart, conv.precisionEnd, "1"})
 		}
 	}
-	if !changed {
+	if len(edits) == 0 {
 		return format, args
 	}
-	filtered := make([]value, 0, len(args))
-	for i, arg := range args {
-		if !drop[i] {
-			filtered = append(filtered, arg)
-		}
-	}
-	return string(out), filtered
+	return applyFormatEdits(format, edits), dropFormatArgs(args, drop)
 }
 
 // Parse given sprintf format string into Go format string, along with

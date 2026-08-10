@@ -86,11 +86,17 @@ func TestSprintfOctalHashZeroPrecision(t *testing.T) {
 		want   string
 	}{
 		{"static zero precision zero value", "%#.0o", []value{num(0)}, "0"},
+		{"static double-zero precision zero value", "%#.00o", []value{num(0)}, "0"},
+		{"static triple-zero precision zero value", "%#.000o", []value{num(0)}, "0"},
+		{"empty precision zero value", "%#.o", []value{num(0)}, "0"},
 		{"static zero precision nonzero value", "%#.0o", []value{num(8)}, "010"},
 		{"dynamic zero precision zero value", "%#.*o", []value{num(0), num(0)}, "0"},
 		{"dynamic zero precision nonzero value", "%#.*o", []value{num(0), num(8)}, "010"},
+		{"dynamic negative precision omitted", "%#.*o", []value{num(-1), num(0)}, "0"},
+		{"dynamic fractional precision truncates to zero", "%#.*o", []value{num(0.5), num(0)}, "0"},
 		{"positive precision zero value preserved", "%#.3o", []value{num(0)}, "000"},
 		{"dynamic positive precision preserved", "%#.*o", []value{num(3), num(0)}, "000"},
+		{"dynamic width and precision", "%#*.*o", []value{num(5), num(0), num(0)}, "    0"},
 		{"width right justified", "%#5.0o", []value{num(0)}, "    0"},
 		{"width left justified", "%#-5.0o", []value{num(0)}, "0    "},
 		{"zero flag suppressed by precision", "%#05.0o", []value{num(0)}, "    0"},
@@ -99,6 +105,7 @@ func TestSprintfOctalHashZeroPrecision(t *testing.T) {
 		{"no hash flag no change nonzero", "%.0o", []value{num(8)}, "10"},
 		{"other verb unaffected", "%#.0x", []value{num(0)}, ""},
 		{"multiple conversions", "%#.0o-%#.*o", []value{num(0), num(0), num(8)}, "0-010"},
+		{"escaped percent and multiple conversions", "%%:%#.00o:%#.*o", []value{num(0), num(0), num(0)}, "%:0:0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
