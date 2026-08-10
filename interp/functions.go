@@ -336,6 +336,7 @@ type cachedFormat struct {
 type printfConversion struct {
 	hash           bool
 	verb           byte
+	verbPos        int
 	precisionDot   int
 	precisionStart int
 	precisionEnd   int
@@ -397,12 +398,31 @@ func scanPrintfConversions(format string) []printfConversion {
 			break
 		}
 		conv.verb = format[i]
+		conv.verbPos = i
 		conv.operandArg = argIndex
 		argIndex++
 		conversions = append(conversions, conv)
 		i++
 	}
 	return conversions
+}
+
+// POSIX printf gives g and G conversions an omitted precision of 6. Go's fmt
+// package instead uses the shortest representation necessary to identify the
+// value, so make the POSIX default explicit before handing the format to fmt.
+// A negative dynamic precision has already been removed by
+// normalizeNegativeDynamicPrecisions and is therefore omitted here too.
+func normalizeDefaultGeneralPrecisions(format string) string {
+	if !strings.ContainsAny(format, "gG") {
+		return format
+	}
+	var edits []formatEdit
+	for _, conv := range scanPrintfConversions(format) {
+		if (conv.verb == 'g' || conv.verb == 'G') && conv.precisionDot < 0 {
+			edits = append(edits, formatEdit{conv.verbPos, conv.verbPos, ".6"})
+		}
+	}
+	return applyFormatEdits(format, edits)
 }
 
 type formatEdit struct {
@@ -571,6 +591,7 @@ func (p *interp) parseFmtTypes(s string) (format string, types []byte, err error
 // Guts of sprintf() function (also used by "printf" statement)
 func (p *interp) sprintf(format string, args []value) (string, error) {
 	format, args = normalizeNegativeDynamicPrecisions(format, args)
+	format = normalizeDefaultGeneralPrecisions(format)
 	format, args = normalizeOctalHashZeroPrecision(format, args)
 	format, types, err := p.parseFmtTypes(format)
 	if err != nil {

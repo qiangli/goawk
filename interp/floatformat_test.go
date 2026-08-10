@@ -55,6 +55,8 @@ func TestSprintfNegativeDynamicPrecisionIsOmitted(t *testing.T) {
 		{"hex float", "%.*a", []value{num(-1), num(0.125)}, "0x1p-3"},
 		{"fixed float", "%.*F", []value{num(-1), num(0.125)}, "0.125000"},
 		{"existing float", "%.*f", []value{num(-1), num(0.125)}, "0.125000"},
+		{"general float defaults to six", "%.*g", []value{num(-1), num(4.323232245)}, "4.32323"},
+		{"uppercase general defaults to six", "%.*G", []value{num(-1), num(4.323232245)}, "4.32323"},
 		{"negative width and precision", "%*.*a", []value{num(-12), num(-1), num(0.125)}, "0x1p-3      "},
 		{"multiple conversions", "%.*a %.1F", []value{num(-1), num(0.125), num(0.125)}, "0x1p-3 0.1"},
 		{"fractional negative precision hex", "%.*a", []value{num(-0.5), num(0.1)}, "0x2p-4"},
@@ -69,6 +71,39 @@ func TestSprintfNegativeDynamicPrecisionIsOmitted(t *testing.T) {
 			}
 			if got != test.want {
 				t.Fatalf("sprintf(%q) = %q, want %q", test.format, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSprintfDefaultGeneralPrecision(t *testing.T) {
+	p := &interp{formatCache: make(map[string]cachedFormat)}
+	tests := []struct {
+		name   string
+		format string
+		args   []value
+		want   string
+	}{
+		{"lowercase", "%g", []value{num(4.323232245)}, "4.32323"},
+		{"uppercase", "%G", []value{num(4.323232245)}, "4.32323"},
+		{"static width and flag", "%+12g", []value{num(4.323232245)}, "    +4.32323"},
+		{"dynamic width", "%*g", []value{num(-12), num(4.323232245)}, "4.32323     "},
+		{"escaped percent and multiple", "%%:%g:%G", []value{num(4.323232245), num(0.00004323232245)}, "%:4.32323:4.32323E-05"},
+		{"alternate form keeps trailing zeros", "%#g", []value{num(4.3)}, "4.30000"},
+		{"explicit empty precision", "%.g", []value{num(4.323232245)}, "4"},
+		{"dynamic zero precision", "%.*g", []value{num(0), num(4.323232245)}, "4"},
+		{"dynamic positive precision", "%.*g", []value{num(3), num(4.323232245)}, "4.32"},
+		{"explicit precision unchanged", "%.9g %.3G", []value{num(4.323232245), num(4.323232245)}, "4.32323224 4.32"},
+		{"explicit zero precision unchanged", "%.0g", []value{num(4.323232245)}, "4"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := p.sprintf(test.format, test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("sprintf(%q, %v) = %q, want %q", test.format, test.args, got, test.want)
 			}
 		})
 	}
