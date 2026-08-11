@@ -109,6 +109,24 @@ func TestSprintfDefaultGeneralPrecision(t *testing.T) {
 	}
 }
 
+func TestValueDefaultGeneralPrecision(t *testing.T) {
+	tests := []struct {
+		format string
+		value  float64
+		want   string
+	}{
+		{"%g", 4.323232245, "4.32323"},
+		{"%G", 0.00004323232245, "4.32323E-05"},
+		{"%#g", 4.3, "4.30000"},
+		{"%.9g", 4.323232245, "4.32323224"},
+	}
+	for _, test := range tests {
+		if got := num(test.value).str(test.format); got != test.want {
+			t.Errorf("num(%v).str(%q) = %q, want %q", test.value, test.format, got, test.want)
+		}
+	}
+}
+
 // POSIX requires "%#o" to print a single "0" for a zero value even when the
 // precision is zero, whereas Go's fmt yields an empty string. See
 // normalizeOctalHashZeroPrecision.

@@ -147,6 +147,11 @@ func (v value) str(floatFormat string) string {
 			if floatFormat == "%.6g" {
 				return strconv.FormatFloat(v.n, 'g', 6, 64)
 			}
+			// OFMT and CONVFMT are printf-style formats. POSIX gives %g
+			// and %G an omitted precision of six, whereas Go's fmt uses
+			// the shortest round-trippable representation. Keep numeric
+			// string conversion consistent with sprintf's normalization.
+			floatFormat = normalizeDefaultGeneralPrecisions(floatFormat)
 			return fmt.Sprintf(floatFormat, v.n)
 		}
 	}
