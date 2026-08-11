@@ -393,7 +393,10 @@ func (s regexSplitter) scan(data []byte, atEOF bool) (advance int, token []byte,
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
 	}
-	loc := (*s.re).FindIndex(data)
+	loc, err := (*s.re).FindIndex(data)
+	if err != nil {
+		return 0, nil, err
+	}
 	// Note: for a regex such as "()", loc[0]==loc[1]. Gawk behavior for this
 	// case is to match the entire input.
 	if loc != nil && loc[0] != loc[1] {
@@ -644,8 +647,11 @@ func (p *interp) setLine(line string, isTrueStr bool) {
 
 // Splits on FS as a regex, appending each field to fields and returning the
 // new slice (for efficiency).
-func (p *interp) splitOnFieldSepRegex(fields []string, line string) []string {
-	indices := p.savedFieldSepRegex.FindAllStringIndex(line, -1)
+func (p *interp) splitOnFieldSepRegex(fields []string, line string) ([]string, error) {
+	indices, err := p.savedFieldSepRegex.FindAllStringIndex(line, -1)
+	if err != nil {
+		return nil, err
+	}
 	prevIndex := 0
 	for _, match := range indices {
 		start, end := match[0], match[1]
@@ -657,14 +663,14 @@ func (p *interp) splitOnFieldSepRegex(fields []string, line string) []string {
 		prevIndex = end
 	}
 	fields = append(fields, line[prevIndex:])
-	return fields
+	return fields, nil
 }
 
 // Ensure that the current line is parsed into fields, splitting it
 // into fields if it hasn't been already
-func (p *interp) ensureFields() {
+func (p *interp) ensureFields() error {
 	if p.haveFields {
-		return
+		return nil
 	}
 	p.haveFields = true
 
@@ -695,7 +701,12 @@ func (p *interp) ensureFields() {
 		p.fields = strings.Split(p.line, p.savedFieldSep)
 	default:
 		// Split on FS as a regex
-		p.fields = p.splitOnFieldSepRegex(p.fields[:0], p.line)
+		var err error
+		p.fields, err = p.splitOnFieldSepRegex(p.fields[:0], p.line)
+		if err != nil {
+			p.haveFields = false
+			return err
+		}
 	}
 
 	// Special case for when RS=="" and FS is single character,
@@ -718,6 +729,7 @@ func (p *interp) ensureFields() {
 		p.fieldsIsTrueStr = append(p.fieldsIsTrueStr, false)
 	}
 	p.numFields = num(float64(len(p.fields)))
+	return nil
 }
 
 // Fetch next line (record) of input from current input file, opening

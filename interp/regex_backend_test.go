@@ -69,28 +69,30 @@ type recordingRegexp struct {
 
 func (r *recordingRegexp) String() string { return r.source }
 
-func (r *recordingRegexp) MatchString(s string) bool {
+func (r *recordingRegexp) MatchString(s string) (bool, error) {
 	r.compiler.mu.Lock()
 	r.compiler.matches[r.source]++
 	r.compiler.mu.Unlock()
-	return r.re.MatchString(s)
+	return r.re.MatchString(s), nil
 }
 
-func (r *recordingRegexp) FindStringIndex(s string) []int {
+func (r *recordingRegexp) FindStringIndex(s string) ([]int, error) {
 	r.compiler.mu.Lock()
 	r.compiler.finds[r.source]++
 	r.compiler.mu.Unlock()
-	return r.re.FindStringIndex(s)
+	return r.re.FindStringIndex(s), nil
 }
 
-func (r *recordingRegexp) FindAllStringIndex(s string, n int) [][]int {
-	return r.re.FindAllStringIndex(s, n)
+func (r *recordingRegexp) FindAllStringIndex(s string, n int) ([][]int, error) {
+	return r.re.FindAllStringIndex(s, n), nil
 }
 
-func (r *recordingRegexp) FindIndex(b []byte) []int       { return r.re.FindIndex(b) }
-func (r *recordingRegexp) Split(s string, n int) []string { return r.re.Split(s, n) }
-func (r *recordingRegexp) ReplaceAllStringFunc(s string, repl func(string) string) string {
-	return r.re.ReplaceAllStringFunc(s, repl)
+func (r *recordingRegexp) FindIndex(b []byte) ([]int, error) { return r.re.FindIndex(b), nil }
+func (r *recordingRegexp) Split(s string, n int) ([]string, error) {
+	return r.re.Split(s, n), nil
+}
+func (r *recordingRegexp) ReplaceAllStringFunc(s string, repl func(string) string) (string, error) {
+	return r.re.ReplaceAllStringFunc(s, repl), nil
 }
 
 func parseAndExec(t *testing.T, source, input string, compiler awkregex.Compiler) (string, error) {
@@ -203,6 +205,90 @@ func TestCustomRegexBackendCompileErrors(t *testing.T) {
 type nilCompiler struct{}
 
 func (nilCompiler) Compile(string) (awkregex.Regexp, error) { return nil, nil }
+
+type runtimeErrorCompiler struct {
+	expr string
+	err  error
+}
+
+func (c runtimeErrorCompiler) Compile(expr string) (awkregex.Regexp, error) {
+	re, err := regexp.Compile("(?s:" + expr + ")")
+	if err != nil {
+		return nil, err
+	}
+	re.Longest()
+	return runtimeErrorRegexp{Regexp: re, fail: expr == c.expr, err: c.err}, nil
+}
+
+type runtimeErrorRegexp struct {
+	*regexp.Regexp
+	fail bool
+	err  error
+}
+
+func (r runtimeErrorRegexp) runtimeError() error {
+	if r.fail {
+		return r.err
+	}
+	return nil
+}
+func (r runtimeErrorRegexp) MatchString(s string) (bool, error) {
+	if err := r.runtimeError(); err != nil {
+		return false, err
+	}
+	return r.Regexp.MatchString(s), nil
+}
+func (r runtimeErrorRegexp) FindStringIndex(s string) ([]int, error) {
+	if err := r.runtimeError(); err != nil {
+		return nil, err
+	}
+	return r.Regexp.FindStringIndex(s), nil
+}
+func (r runtimeErrorRegexp) FindAllStringIndex(s string, n int) ([][]int, error) {
+	if err := r.runtimeError(); err != nil {
+		return nil, err
+	}
+	return r.Regexp.FindAllStringIndex(s, n), nil
+}
+func (r runtimeErrorRegexp) FindIndex(b []byte) ([]int, error) {
+	if err := r.runtimeError(); err != nil {
+		return nil, err
+	}
+	return r.Regexp.FindIndex(b), nil
+}
+func (r runtimeErrorRegexp) Split(s string, n int) ([]string, error) {
+	if err := r.runtimeError(); err != nil {
+		return nil, err
+	}
+	return r.Regexp.Split(s, n), nil
+}
+func (r runtimeErrorRegexp) ReplaceAllStringFunc(s string, repl func(string) string) (string, error) {
+	if err := r.runtimeError(); err != nil {
+		return "", err
+	}
+	return r.Regexp.ReplaceAllStringFunc(s, repl), nil
+}
+
+func TestCustomRegexBackendRuntimeErrors(t *testing.T) {
+	wantErr := errors.New("runtime matcher failed")
+	tests := map[string]struct{ source, input, expr string }{
+		"literal": {`/lit/ { print }`, "lit\n", "lit"},
+		"match":   {`BEGIN { print match("x", "mat") }`, "", "mat"},
+		"FS":      {`BEGIN { FS="fsep" } { print NF }`, "a fsep b\n", "fsep"},
+		"RS":      {`BEGIN { RS="rsep+" } { print }`, "a rsep b", "rsep+"},
+		"split":   {`BEGIN { split("a,b", a, "splitsep") }`, "", "splitsep"},
+		"sub":     {`BEGIN { s="a"; sub("subsep", "x", s) }`, "", "subsep"},
+		"gsub":    {`BEGIN { s="a"; gsub("gsubsep", "x", s) }`, "", "gsubsep"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseAndExec(t, tc.source, tc.input, runtimeErrorCompiler{expr: tc.expr, err: wantErr})
+			if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
+				t.Fatalf("error = %v, want runtime matcher error", err)
+			}
+		})
+	}
+}
 
 func TestCustomRegexBackendRejectsNilRegexp(t *testing.T) {
 	if _, err := parser.ParseProgram([]byte(`/literal/ { print }`), &parser.ParserConfig{RegexCompiler: nilCompiler{}}); err == nil ||

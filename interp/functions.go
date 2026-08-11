@@ -276,7 +276,10 @@ func (p *interp) split(s string, scope resolver.Scope, index int, sep string, se
 		if err != nil {
 			return 0, err
 		}
-		parts = re.Split(s, -1)
+		parts, err = re.Split(s, -1)
+		if err != nil {
+			return 0, err
+		}
 	}
 	array := make(map[string]value, len(parts))
 	for i, part := range parts {
@@ -293,7 +296,7 @@ func (p *interp) sub(regex, repl, in string, global bool) (out string, num int, 
 		return "", 0, err
 	}
 	count := 0
-	out = re.ReplaceAllStringFunc(in, func(s string) string {
+	out, err = re.ReplaceAllStringFunc(in, func(s string) string {
 		// Only do the first replacement for sub(), or all for gsub()
 		if !global && count > 0 {
 			return s
@@ -325,6 +328,9 @@ func (p *interp) sub(regex, repl, in string, global bool) (out string, num int, 
 		}
 		return string(r)
 	})
+	if err != nil {
+		return "", 0, err
+	}
 	return out, count, nil
 }
 

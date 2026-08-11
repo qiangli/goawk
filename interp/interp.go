@@ -761,43 +761,45 @@ lineLoop:
 }
 
 // Get a special variable by index
-func (p *interp) getSpecial(index int) value {
+func (p *interp) getSpecial(index int) (value, error) {
 	switch index {
 	case ast.V_NF:
-		p.ensureFields()
-		return p.numFields
+		if err := p.ensureFields(); err != nil {
+			return null(), err
+		}
+		return p.numFields, nil
 	case ast.V_NR:
-		return p.lineNum
+		return p.lineNum, nil
 	case ast.V_RLENGTH:
-		return p.matchLength
+		return p.matchLength, nil
 	case ast.V_RSTART:
-		return p.matchStart
+		return p.matchStart, nil
 	case ast.V_FNR:
-		return p.fileLineNum
+		return p.fileLineNum, nil
 	case ast.V_ARGC:
-		return p.argc
+		return p.argc, nil
 	case ast.V_CONVFMT:
-		return str(p.convertFormat)
+		return str(p.convertFormat), nil
 	case ast.V_FILENAME:
-		return p.filename
+		return p.filename, nil
 	case ast.V_FS:
-		return str(p.fieldSep)
+		return str(p.fieldSep), nil
 	case ast.V_OFMT:
-		return str(p.outputFormat)
+		return str(p.outputFormat), nil
 	case ast.V_OFS:
-		return str(p.outputFieldSep)
+		return str(p.outputFieldSep), nil
 	case ast.V_ORS:
-		return str(p.outputRecordSep)
+		return str(p.outputRecordSep), nil
 	case ast.V_RS:
-		return str(p.recordSep)
+		return str(p.recordSep), nil
 	case ast.V_RT:
-		return str(p.recordTerminator)
+		return str(p.recordTerminator), nil
 	case ast.V_SUBSEP:
-		return str(p.subscriptSep)
+		return str(p.subscriptSep), nil
 	case ast.V_INPUTMODE:
-		return str(inputModeString(p.inputMode, p.csvInputConfig))
+		return str(inputModeString(p.inputMode, p.csvInputConfig)), nil
 	case ast.V_OUTPUTMODE:
-		return str(outputModeString(p.outputMode, p.csvOutputConfig))
+		return str(outputModeString(p.outputMode, p.csvOutputConfig)), nil
 	default:
 		panic(fmt.Sprintf("unexpected special variable index: %d", index))
 	}
@@ -829,7 +831,9 @@ func (p *interp) setSpecial(index int, v value) error {
 		if numFields > maxFieldIndex {
 			return newError("NF set too large: %d", numFields)
 		}
-		p.ensureFields()
+		if err := p.ensureFields(); err != nil {
+			return err
+		}
 		p.numFields = v
 		if numFields < len(p.fields) {
 			p.fields = p.fields[:numFields]
@@ -959,28 +963,30 @@ func (p *interp) setArrayValue(scope resolver.Scope, arrayIndex int, index strin
 }
 
 // Get the value of given numbered field, equivalent to "$index"
-func (p *interp) getField(index int) value {
+func (p *interp) getField(index int) (value, error) {
 	if index == 0 {
 		if p.lineIsTrueStr {
-			return str(p.line)
+			return str(p.line), nil
 		} else {
-			return numStr(p.line)
+			return numStr(p.line), nil
 		}
 	}
-	p.ensureFields()
+	if err := p.ensureFields(); err != nil {
+		return null(), err
+	}
 	if index < 1 {
 		index = len(p.fields) + 1 + index
 		if index < 1 {
-			return str("")
+			return str(""), nil
 		}
 	}
 	if index > len(p.fields) {
-		return str("")
+		return str(""), nil
 	}
 	if p.fieldsIsTrueStr[index-1] {
-		return str(p.fields[index-1])
+		return str(p.fields[index-1]), nil
 	} else {
-		return numStr(p.fields[index-1])
+		return numStr(p.fields[index-1]), nil
 	}
 }
 
@@ -1000,7 +1006,7 @@ func (p *interp) getFieldByName(name string) (value, error) {
 	if index == 0 {
 		return str(""), nil
 	}
-	return p.getField(index), nil
+	return p.getField(index)
 }
 
 // Sets a single field, equivalent to "$index = value"
@@ -1013,7 +1019,9 @@ func (p *interp) setField(index int, value string) error {
 		return newError("field index too large: %d", index)
 	}
 	// If there aren't enough fields, add empty string fields in between
-	p.ensureFields()
+	if err := p.ensureFields(); err != nil {
+		return err
+	}
 	if index < 1 {
 		index = len(p.fields) + 1 + index
 		if index < 1 {

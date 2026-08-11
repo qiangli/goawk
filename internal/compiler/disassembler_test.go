@@ -2,12 +2,20 @@ package compiler
 
 import (
 	"bytes"
-	"regexp"
 	"strings"
 	"testing"
 
 	awkregex "github.com/benhoyt/goawk/regex"
 )
+
+func mustCompileRegex(t *testing.T, source string) awkregex.Regexp {
+	t.Helper()
+	re, err := awkregex.DefaultCompiler().Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return re
+}
 
 func TestDisassembler(t *testing.T) {
 	// Note: this doesn't really test the disassembly, just that each opcode
@@ -27,7 +35,7 @@ func TestDisassembler(t *testing.T) {
 				},
 				Nums:            []float64{0},
 				Strs:            []string{""},
-				Regexes:         []awkregex.Regexp{regexp.MustCompile("")},
+				Regexes:         []awkregex.Regexp{mustCompileRegex(t, "")},
 				scalarNames:     []string{"s"},
 				arrayNames:      []string{"a"},
 				nativeFuncNames: []string{"n"},

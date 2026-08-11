@@ -69,13 +69,19 @@ func (p *interp) execute(code []compiler.Opcode) error {
 
 		case compiler.Field:
 			index := p.peekTop()
-			v := p.getField(int(index.num()))
+			v, err := p.getField(int(index.num()))
+			if err != nil {
+				return err
+			}
 			p.replaceTop(v)
 
 		case compiler.FieldInt:
 			index := code[ip]
 			ip++
-			v := p.getField(int(index))
+			v, err := p.getField(int(index))
+			if err != nil {
+				return err
+			}
 			p.push(v)
 
 		case compiler.FieldByName:
@@ -109,7 +115,11 @@ func (p *interp) execute(code []compiler.Opcode) error {
 		case compiler.Special:
 			index := code[ip]
 			ip++
-			p.push(p.getSpecial(int(index)))
+			v, err := p.getSpecial(int(index))
+			if err != nil {
+				return err
+			}
+			p.push(v)
 
 		case compiler.ArrayGlobal:
 			arrayIndex := code[ip]
@@ -215,8 +225,11 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			amount := code[ip]
 			ip++
 			index := int(p.pop().num())
-			v := p.getField(index)
-			err := p.setField(index, p.toString(num(v.num()+float64(amount))))
+			v, err := p.getField(index)
+			if err != nil {
+				return err
+			}
+			err = p.setField(index, p.toString(num(v.num()+float64(amount))))
 			if err != nil {
 				return err
 			}
@@ -237,8 +250,11 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			amount := code[ip]
 			index := int(code[ip+1])
 			ip += 2
-			v := p.getSpecial(index)
-			err := p.setSpecial(index, num(v.num()+float64(amount)))
+			v, err := p.getSpecial(index)
+			if err != nil {
+				return err
+			}
+			err = p.setSpecial(index, num(v.num()+float64(amount)))
 			if err != nil {
 				return err
 			}
@@ -264,7 +280,10 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			ip++
 			right, indexVal := p.popTwo()
 			index := int(indexVal.num())
-			field := p.getField(index)
+			field, err := p.getField(index)
+			if err != nil {
+				return err
+			}
 			v, err := p.augAssignOp(operation, field, right)
 			if err != nil {
 				return err
@@ -298,7 +317,11 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			operation := compiler.AugOp(code[ip])
 			index := int(code[ip+1])
 			ip += 2
-			v, err := p.augAssignOp(operation, p.getSpecial(index), p.pop())
+			special, err := p.getSpecial(index)
+			if err != nil {
+				return err
+			}
+			v, err := p.augAssignOp(operation, special, p.pop())
 			if err != nil {
 				return err
 			}
@@ -337,7 +360,11 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			index := code[ip]
 			ip++
 			re := p.regexes[index]
-			p.push(boolean(re.MatchString(p.line)))
+			matched, err := re.MatchString(p.line)
+			if err != nil {
+				return err
+			}
+			p.push(boolean(matched))
 
 		case compiler.IndexMulti:
 			numValues := int(code[ip])
@@ -462,7 +489,10 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			if err != nil {
 				return err
 			}
-			matched := re.MatchString(p.toString(l))
+			matched, err := re.MatchString(p.toString(l))
+			if err != nil {
+				return err
+			}
 			p.replaceTop(boolean(matched))
 
 		case compiler.NotMatch:
@@ -471,7 +501,10 @@ func (p *interp) execute(code []compiler.Opcode) error {
 			if err != nil {
 				return err
 			}
-			matched := re.MatchString(p.toString(l))
+			matched, err := re.MatchString(p.toString(l))
+			if err != nil {
+				return err
+			}
 			p.replaceTop(boolean(!matched))
 
 		case compiler.Not:
@@ -1034,7 +1067,10 @@ func (p *interp) callBuiltin(builtinOp compiler.BuiltinOp) error {
 		if err != nil {
 			return err
 		}
-		loc := re.FindStringIndex(s)
+		loc, err := re.FindStringIndex(s)
+		if err != nil {
+			return err
+		}
 		if loc == nil {
 			p.matchStart = num(0)
 			p.matchLength = num(-1)
