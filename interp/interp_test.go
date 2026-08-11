@@ -347,9 +347,13 @@ BEGIN {
 	{`
 BEGIN {
 	print CONVFMT, 1.2345678 ""
+	CONVFMT = "%g"
+	print CONVFMT, 4.323232245 ""
+	CONVFMT = "%G"
+	print CONVFMT, 0.00004323232245 ""
 	CONVFMT = "%.3g"
 	print CONVFMT, 1.234567 ""
-}`, "", "%.6g 1.23457\n%.3g 1.23\n", "", ""},
+}`, "", "%.6g 1.23457\n%g 4.32323\n%G 4.32323E-05\n%.3g 1.23\n", "", ""},
 	{`BEGIN { FILENAME = "foo"; print FILENAME }`, "", "foo\n", "", ""},
 	{`BEGIN { FILENAME = "123.0"; print (FILENAME==123) }`, "", "0\n", "", ""},
 	// Other FILENAME behaviour is tested in goawk_test.go
@@ -376,9 +380,13 @@ BEGIN {
 	{`
 BEGIN {
 	print OFMT, 1.2345678
+	OFMT = "%g"
+	print OFMT, 4.323232245
+	OFMT = "%G"
+	print OFMT, 0.00004323232245
 	OFMT = "%.3g"
 	print OFMT, 1.234567
-}`, "", "%.6g 1.23457\n%.3g 1.23\n", "", ""},
+}`, "", "%.6g 1.23457\n%g 4.32323\n%G 4.32323E-05\n%.3g 1.23\n", "", ""},
 	// OFS and ORS are tested above
 	{`BEGIN { print RSTART, RLENGTH; RSTART=5; RLENGTH=42; print RSTART, RLENGTH; } `, "",
 		"0 0\n5 42\n", "", ""},
