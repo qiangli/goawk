@@ -2,13 +2,17 @@ package regex
 
 import "regexp"
 
-// Regexp is the regular expression surface used by GoAWK's expression
-// operators. String must return a stable representation for diagnostics and
-// disassembly.
+// Regexp is the regular expression surface used by all GoAWK expression,
+// separator, splitting, and substitution operations. String must return a
+// stable representation for diagnostics and disassembly.
 type Regexp interface {
 	String() string
 	MatchString(s string) bool
 	FindStringIndex(s string) []int
+	FindAllStringIndex(s string, n int) [][]int
+	FindIndex(b []byte) []int
+	Split(s string, n int) []string
+	ReplaceAllStringFunc(s string, repl func(string) string) string
 }
 
 // Compiler compiles AWK extended regular expressions. Implementations must

@@ -83,6 +83,16 @@ func (r *recordingRegexp) FindStringIndex(s string) []int {
 	return r.re.FindStringIndex(s)
 }
 
+func (r *recordingRegexp) FindAllStringIndex(s string, n int) [][]int {
+	return r.re.FindAllStringIndex(s, n)
+}
+
+func (r *recordingRegexp) FindIndex(b []byte) []int       { return r.re.FindIndex(b) }
+func (r *recordingRegexp) Split(s string, n int) []string { return r.re.Split(s, n) }
+func (r *recordingRegexp) ReplaceAllStringFunc(s string, repl func(string) string) string {
+	return r.re.ReplaceAllStringFunc(s, repl)
+}
+
 func parseAndExec(t *testing.T, source, input string, compiler awkregex.Compiler) (string, error) {
 	t.Helper()
 	var parserConfig *parser.ParserConfig
@@ -132,7 +142,7 @@ END {
 	}
 }
 
-func TestCustomRegexBackendExcludedSurfacesUseStandardLibrary(t *testing.T) {
+func TestCustomRegexBackendCoversStandardSurfaces(t *testing.T) {
 	compiler := newRecordingCompiler()
 	source := `BEGIN { FS = "[,:]"; RS = ";+" }
 {
@@ -146,11 +156,33 @@ func TestCustomRegexBackendExcludedSurfacesUseStandardLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output == "" {
-		t.Fatal("program produced no output")
+	if output != "2 3 xy\n" {
+		t.Fatalf("output = %q, want %q", output, "2 3 xy\n")
 	}
-	if got := compiler.totalCompiles(); got != 0 {
-		t.Fatalf("custom backend compiled %d excluded FS/RS/split/sub/gsub expressions, want 0", got)
+	for _, expr := range []string{"[,:]", ";+", "a+", "b+"} {
+		if compiles, _, _ := compiler.counts(expr); compiles == 0 {
+			t.Errorf("custom backend did not compile %q", expr)
+		}
+	}
+}
+
+func TestCustomRegexBackendStandardSurfaceErrors(t *testing.T) {
+	programs := map[string]string{
+		"FS":    `BEGIN { FS = "bad" }`,
+		"RS":    `BEGIN { RS = "bad" }`,
+		"split": `BEGIN { split("x", a, "bad") }`,
+		"sub":   `BEGIN { s = "x"; sub("bad", "y", s) }`,
+		"gsub":  `BEGIN { s = "x"; gsub("bad", "y", s) }`,
+	}
+	for name, source := range programs {
+		t.Run(name, func(t *testing.T) {
+			compiler := newRecordingCompiler()
+			compiler.reject = "bad"
+			_, err := parseAndExec(t, source, "", compiler)
+			if err == nil || !strings.Contains(err.Error(), `invalid regex "bad": recording backend rejected expression`) {
+				t.Fatalf("error = %v, want custom backend rejection", err)
+			}
+		})
 	}
 }
 

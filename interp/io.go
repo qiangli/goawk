@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/benhoyt/goawk/internal/resolver"
 	"github.com/benhoyt/goawk/lexer"
+	"github.com/benhoyt/goawk/regex"
 )
 
 // Print a line of output followed by a newline
@@ -383,9 +383,9 @@ func (s byteSplitter) scan(data []byte, atEOF bool) (advance int, token []byte, 
 
 // Splitter that splits records on the given regular expression.
 type regexSplitter struct {
-	// Use a pointer to a *Regexp (&p.recordSepRegex) so that the splitter always reads
+	// Use a pointer to the interface so the splitter always reads
 	// the current regex, allowing dynamic changes to RS during execution.
-	re         **regexp.Regexp
+	re         *regex.Regexp
 	terminator *string
 }
 

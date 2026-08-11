@@ -45,12 +45,12 @@ type ParserConfig struct {
 	// on interp.Config.Funcs for details.
 	Funcs map[string]any
 
-	// RegexCompiler specifies the backend used for regular expression
-	// literals and dynamic expression operators (~, !~, and match). The
-	// selected compiler is retained by the returned Program for its entire
-	// lifetime, including repeated interpreter executions. If nil, GoAWK uses
-	// its standard-library regexp backend. FS, RS, split, sub, and gsub are not
-	// affected by this first-slice extension.
+	// RegexCompiler specifies the backend used for every regular expression:
+	// literals, dynamic expression operators (~, !~, and match), and the FS,
+	// RS, split, sub, and gsub runtime surfaces. The selected compiler is
+	// retained by the returned Program for its entire lifetime, including
+	// repeated interpreter executions. If nil, GoAWK uses its standard-library
+	// regexp backend.
 	RegexCompiler regex.Compiler
 }
 

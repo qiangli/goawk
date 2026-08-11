@@ -121,9 +121,9 @@ type interp struct {
 	convertFormat    string
 	outputFormat     string
 	fieldSep         string
-	fieldSepRegex    *regexp.Regexp
+	fieldSepRegex    regex.Regexp
 	recordSep        string
-	recordSepRegex   *regexp.Regexp
+	recordSepRegex   regex.Regexp
 	recordTerminator string
 	outputFieldSep   string
 	outputRecordSep  string
@@ -136,7 +136,7 @@ type interp struct {
 	csvOutputConfig  CSVOutputConfig
 
 	savedFieldSep      string
-	savedFieldSepRegex *regexp.Regexp
+	savedFieldSepRegex regex.Regexp
 
 	// Parsed program, compiled functions and constants
 	program   *parser.Program
@@ -155,7 +155,6 @@ type interp struct {
 	random            *rand.Rand
 	randSeed          float64
 	exitStatus        int
-	regexCacheStd     map[string]*regexp.Regexp
 	regexCache        map[string]regex.Regexp
 	regexCompiler     regex.Compiler
 	formatCache       map[string]cachedFormat
@@ -426,7 +425,6 @@ func newInterp(program *parser.Program) *interp {
 	}
 
 	// Initialize defaults
-	p.regexCacheStd = make(map[string]*regexp.Regexp, 10)
 	p.regexCache = make(map[string]regex.Regexp, 10)
 	p.formatCache = make(map[string]cachedFormat, 10)
 	p.randSeed = 1.0
@@ -864,15 +862,10 @@ func (p *interp) setSpecial(index int, v value) error {
 	case ast.V_FS:
 		p.fieldSep = p.toString(v)
 		if utf8.RuneCountInString(p.fieldSep) > 1 { // compare to interp.ensureFields
-			norm, err := regex.Normalize(p.fieldSep)
+			re, err := p.compileRegexStd(p.fieldSep)
 			if err != nil {
-				return newError("invalid regex %q: %s", p.fieldSep, err)
+				return err
 			}
-			re, err := regexp.Compile(compiler.AddRegexFlags(norm))
-			if err != nil {
-				return newError("invalid regex %q: %s", p.fieldSep, err)
-			}
-			re.Longest() // other awks use leftmost-longest matching
 			p.fieldSepRegex = re
 		}
 	case ast.V_OFMT:
@@ -888,23 +881,24 @@ func (p *interp) setSpecial(index int, v value) error {
 			// Simple cases use specialized splitters, not regex. However, we still update
 			// recordSepRegex in case an active regexSplitter is still using it.
 			sep := regexp.QuoteMeta(p.recordSep)
-			p.recordSepRegex = regexp.MustCompile(sep)
-			p.recordSepRegex.Longest() // other awks use leftmost-longest matching
+			re, err := p.compileRegexStd(sep)
+			if err != nil {
+				return err
+			}
+			p.recordSepRegex = re
 		case utf8.RuneCountInString(p.recordSep) == 1:
 			// Multi-byte unicode char falls back to regex splitter
 			sep := regexp.QuoteMeta(p.recordSep) // not strictly necessary as no multi-byte chars are regex meta chars
-			p.recordSepRegex = regexp.MustCompile(sep)
-			p.recordSepRegex.Longest() // other awks use leftmost-longest matching
+			re, err := p.compileRegexStd(sep)
+			if err != nil {
+				return err
+			}
+			p.recordSepRegex = re
 		default:
-			norm, err := regex.Normalize(p.recordSep)
+			re, err := p.compileRegexStd(p.recordSep)
 			if err != nil {
-				return newError("invalid regex %q: %s", p.recordSep, err)
+				return err
 			}
-			re, err := regexp.Compile(compiler.AddRegexFlags(norm))
-			if err != nil {
-				return newError("invalid regex %q: %s", p.recordSep, err)
-			}
-			re.Longest() // other awks use leftmost-longest matching
 			p.recordSepRegex = re
 		}
 	case ast.V_RT:
@@ -1057,27 +1051,8 @@ func (p *interp) toString(v value) string {
 }
 
 // Compile standard regex string (for FS, RS, split, sub, gsub)
-func (p *interp) compileRegexStd(regexStr string) (*regexp.Regexp, error) {
-	if re, ok := p.regexCacheStd[regexStr]; ok {
-		return re, nil
-	}
-
-	norm, err := regex.Normalize(regexStr)
-	if err != nil {
-		return nil, newError("invalid regex %q: %s", regexStr, err)
-	}
-
-	re, err := regexp.Compile(compiler.AddRegexFlags(norm))
-	if err != nil {
-		return nil, newError("invalid regex %q: %s", regexStr, err)
-	}
-	re.Longest() // other awks use leftmost-longest matching
-
-	// Dumb, non-LRU cache: just cache the first N regexes
-	if len(p.regexCacheStd) < maxCachedRegexes {
-		p.regexCacheStd[regexStr] = re
-	}
-	return re, nil
+func (p *interp) compileRegexStd(regexStr string) (regex.Regexp, error) {
+	return p.compileRegex(regexStr)
 }
 
 // Compile custom regex string (for match(), ~, !~)
